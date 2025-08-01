@@ -504,35 +504,61 @@ def get_vertices(polydata: "vtk.vtkPolyData") -> np.ndarray:
         for each vertex.
 
     """
+    # Use GetPoints() to get the geometric coordinates.
     vtk_points = polydata.GetPoints()
-    vertices = numpy_support.vtk_to_numpy(vtk_points.GetData())
+
+    if vtk_points and vtk_points.GetNumberOfPoints() > 0:
+
+        vertices = numpy_support.vtk_to_numpy(vtk_points.GetData())
+    else:
+        print("\nWarning: No points found in the polydata object.")
+        vertices = np.empty((0, 3))
     return vertices
+
+
 
 
 def get_volume_data(
     polydata: "vtk.vtkPolyData", variable_names: list[str]
 ) -> tuple[np.ndarray, list[np.ndarray]]:
-    """Extract vertices and field data from 3D volumetric mesh.
-
-    This function extracts both geometric information (vertex coordinates)
-    and field data from a 3D volumetric mesh. It's commonly used for
-    processing finite element analysis results.
-
-    Args:
-        polydata: VTK polydata representing a 3D volumetric mesh.
-        variable_names: List of field variable names to extract.
-
-    Returns:
-        Tuple containing:
-        - Vertex coordinates as NumPy array of shape (n_vertices, 3)
-        - List of field arrays, one per variable
-
     """
-    vertices = get_vertices(polydata)
+    Extracts vertices and field data from a 3D volumetric mesh.
+    Ensures that the final field data is associated with points. If data is only
+    found on cells, it will be interpolated to the points.
+    """
     point_data = polydata.GetPointData()
-    fields = get_fields(point_data, variable_names)
+    cell_data = polydata.GetCellData()
+    fields = None
+
+    # First, check if the data already exists on the points.
+    if point_data.HasArray(variable_names[0]):
+        vertices = get_vertices(polydata)
+        print("Using existing PointData.")
+        fields = get_fields(point_data, variable_names)
+
+    # If not on points, check if it's on the cells and convert it.
+    elif cell_data.HasArray(variable_names[0]):
+        print("Data found on cells. Converting CellData to PointData...")
+
+        # Create the conversion filter.
+        c2p_filter = vtk.vtkCellDataToPointData()
+
+        # Set the input mesh for the filter.
+        c2p_filter.SetInputData(polydata)
+        c2p_filter.Update()
+        processed_polydata = c2p_filter.GetOutput()
+
+        vertices = get_vertices(processed_polydata)
+
+        # Extract the fields from the new point data.
+        fields = get_fields(processed_polydata.GetPointData(), variable_names)
+
+    else:
+        print(f"\nWarning: Could not find variables '{variable_names}' in PointData or CellData.")
+        return vertices, []
 
     return vertices, fields
+
 
 
 def get_surface_data(
