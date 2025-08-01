@@ -1048,43 +1048,45 @@ def compute_scaling_factors(cfg: DictConfig, input_path: str, use_cache: bool) -
                 gpu_output=True,
             )
 
-            # Calculate mean
+            # Calculate mean and std
             if cfg.model.normalization == "mean_std_scaling":
+            # Collect all data from the dataset in a single loop.
+                all_vol_fields = []
                 for j in range(len(fm_dict)):
-                    print("On iteration {j}")
                     d_dict = fm_dict[j]
                     vol_fields = d_dict["volume_fields"]
 
                     if vol_fields is not None:
-                        if j == 0:
-                            vol_fields_sum = np.mean(vol_fields, 0)
-                        else:
-                            vol_fields_sum += np.mean(vol_fields, 0)
+                        all_vol_fields.append(vol_fields)
+
+                if all_vol_fields:
+                    # Concatenate all tensors into one large tensor.
+                    full_vol_tensor = torch.cat(all_vol_fields, dim=0)
+
+                    if full_vol_tensor.device.type == "cuda":
+                        try:
+                            xp = cp
+
+                            full_vol_array = cp.from_dlpack(full_vol_tensor)
+                        except ImportError:
+                            xp = np
+                            full_vol_array = full_vol_tensor.cpu().numpy()
                     else:
-                        vol_fields_sum = 0.0
+                        xp = np
+                        full_vol_array = full_vol_tensor.cpu().numpy()
 
-                vol_fields_mean = vol_fields_sum / len(fm_dict)
+                    # Compute mean and std deviation
+                    vol_fields_mean = xp.mean(full_vol_array, axis=0)
+                    vol_fields_std = xp.std(full_vol_array, axis=0)
 
-                for j in range(len(fm_dict)):
-                    print("On iteration {j} again")
-                    d_dict = fm_dict[j]
-                    vol_fields = d_dict["volume_fields"]
+                else:
+                    vol_fields_mean = 0.0
+                    vol_fields_std = 0.0
 
-                    if vol_fields is not None:
-                        if j == 0:
-                            vol_fields_sum_square = np.mean(
-                                (vol_fields - vol_fields_mean) ** 2.0, 0
-                            )
-                        else:
-                            vol_fields_sum_square += np.mean(
-                                (vol_fields - vol_fields_mean) ** 2.0, 0
-                            )
-                    else:
-                        vol_fields_sum_square = 0.0
-
-                vol_fields_std = np.sqrt(vol_fields_sum_square / len(fm_dict))
-
+                # Store the final scaling factors
                 vol_scaling_factors = [vol_fields_mean, vol_fields_std]
+                print("vol_scaling_factors: ", vol_scaling_factors)
+
 
             if cfg.model.normalization == "min_max_scaling":
                 for j in range(len(fm_dict)):
@@ -1160,43 +1162,52 @@ def compute_scaling_factors(cfg: DictConfig, input_path: str, use_cache: bool) -
                 compute_scaling_factors=True,
             )
 
-            # Calculate mean
+            # Calculate mean and std for surface fields
             if cfg.model.normalization == "mean_std_scaling":
+
+                # Collect all data from the dataset in a single loop.
+                all_surf_fields = []
                 for j in range(len(fm_dict)):
-                    print(f"Mean std scaling on iteration {j}")
                     d_dict = fm_dict[j]
-                    surf_fields = d_dict["surface_fields"].cpu().numpy()
+                    surf_fields = d_dict.get("surface_fields")
 
                     if surf_fields is not None:
-                        if j == 0:
-                            surf_fields_sum = np.mean(surf_fields, 0)
-                        else:
-                            surf_fields_sum += np.mean(surf_fields, 0)
+                        all_surf_fields.append(surf_fields)
+
+                if all_surf_fields:
+                    # Concatenate all tensors into one large tensor.
+                    full_surf_tensor = torch.cat(all_surf_fields, dim=0)
+
+                    if full_surf_tensor.device.type == "cuda":
+                        try:
+                            xp = cp
+                            full_surf_array = cp.from_dlpack(full_surf_tensor)
+                        except (ImportError, NameError):
+                            xp = np
+                            full_surf_array = full_surf_tensor.cpu().numpy()
                     else:
-                        surf_fields_sum = 0.0
+                        xp = np
+                        full_surf_array = full_surf_tensor.cpu().numpy()
 
-                surf_fields_mean = surf_fields_sum / len(fm_dict)
+                    # Compute mean and std deviation
+                    surf_fields_mean = xp.mean(full_surf_array, axis=0)
+                    surf_fields_std = xp.std(full_surf_array, axis=0)
 
-                for j in range(len(fm_dict)):
-                    print(f"Mean std scaling on iteration {j} again")
-                    d_dict = fm_dict[j]
-                    surf_fields = d_dict["surface_fields"]
+                else:
+                    surf_fields_mean = 0.0
+                    surf_fields_std = 0.0
 
-                    if surf_fields is not None:
-                        if j == 0:
-                            surf_fields_sum_square = np.mean(
-                                (surf_fields - surf_fields_mean) ** 2.0, 0
-                            )
-                        else:
-                            surf_fields_sum_square += np.mean(
-                                (surf_fields - surf_fields_mean) ** 2.0, 0
-                            )
-                    else:
-                        surf_fields_sum_square = 0.0
-
-                surf_fields_std = np.sqrt(surf_fields_sum_square / len(fm_dict))
-
+                # Store the final scaling factors.
                 surf_scaling_factors = [surf_fields_mean, surf_fields_std]
+                print("surf_scaling_factors:",surf_scaling_factors)
+
+                # Save the final scaling factors.
+                if xp and xp.__name__ == 'cupy':
+                    surf_scaling_factors_np = [arr.get() for arr in surf_scaling_factors]
+                    np.save(surf_save_path, surf_scaling_factors_np)
+                else:
+                    np.save(surf_save_path, surf_scaling_factors)
+
 
             if cfg.model.normalization == "min_max_scaling":
                 for j in range(len(fm_dict)):
