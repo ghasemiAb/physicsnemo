@@ -14,8 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Deprecated compatibility imports for DiT."""
+from .knn import KNN, knn
+from .radius_search import RadiusSearch, radius_search
 
-from physicsnemo.models.dit.dit import DiT
-
-__all__ = ["DiT"]
+__all__ = [
+    "KNN",
+    "knn",
+    "RadiusSearch",
+    "radius_search",
+]
