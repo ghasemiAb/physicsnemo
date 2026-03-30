@@ -20,6 +20,50 @@ The **interface band** (where $0.01 \lt \text{VOF} \lt 0.99$) is the physically 
 
 ---
 
+The model was trained on a limited dataset comprising just 20 samples for training and 2 for validation/testing, targeting the epoxy Volume of Fluid (VOF) simulation. Despite the remarkably small dataset size, the model demonstrates a strong ability to accurately capture the interface dynamics. As illustrated in the animation below, the predicted interface evolution closely tracks the expected behavior, highlighting the model's data efficiency and generalization capability.
+
+<p align="center">
+  <img src="./img/G20.gif" alt="Epoxy VOF Animation" width="60%" />
+  <br>
+  <em>Predicted vs Ground Truth VOF interface evolution over 19 time steps</em>
+</p>
+
+
+The table below summarizes the model's performance across 19 autoregressive time steps. **Fill %** represents the percentage of the domain occupied by epoxy (VOF ≥ 0.5), while **MAE** and **RMSE** quantify the per-cell prediction error against the ground truth.
+
+| Step | Pred Fill % | GT Fill % | MAE | RMSE |
+|:----:|:-----------:|:---------:|:-------:|:-------:|
+| t=1 | 24.7% | 25.2% | 0.01243 | 0.04910 |
+| t=2 | 29.5% | 31.6% | 0.02136 | 0.07739 |
+| t=3 | 34.2% | 37.1% | 0.02482 | 0.08044 |
+| t=4 | 39.9% | 41.9% | 0.02181 | 0.07051 |
+| t=5 | 44.1% | 46.2% | 0.01836 | 0.06124 |
+| t=6 | 48.4% | 50.0% | 0.01859 | 0.05923 |
+| t=7 | 52.5% | 53.8% | 0.01537 | 0.05151 |
+| t=8 | 56.4% | 57.4% | 0.01560 | 0.05329 |
+| t=9 | 59.7% | 60.6% | 0.01461 | 0.04989 |
+| t=10 | 62.4% | 63.2% | 0.01488 | 0.04992 |
+| t=11 | 64.9% | 65.8% | 0.01490 | 0.04892 |
+| t=12 | 66.7% | 67.6% | 0.01426 | 0.04572 |
+| t=13 | 68.3% | 69.1% | 0.01366 | 0.04367 |
+| t=14 | 69.8% | 70.7% | 0.01405 | 0.04585 |
+| t=15 | 71.4% | 72.1% | 0.01285 | 0.04219 |
+| t=16 | 72.7% | 73.6% | 0.01410 | 0.04543 |
+| t=17 | 74.0% | 74.9% | 0.01478 | 0.04581 |
+| t=18 | 75.1% | 76.3% | 0.01666 | 0.05027 |
+| t=19 | 76.4% | 77.5% | 0.01758 | 0.05143 |
+
+**Column Descriptions:**
+- **Step** — Autoregressive rollout time step.
+- **Pred Fill %** — Predicted percentage of the domain filled with epoxy.
+- **GT Fill %** — Ground truth fill percentage from the CFD simulation.
+- **MAE** — Mean Absolute Error between predicted and ground truth VOF fields.
+- **RMSE** — Root Mean Square Error between predicted and ground truth VOF fields.
+
+> The model maintains low MAE (≤ 0.025) and RMSE (≤ 0.08) throughout all 19 time steps, with the predicted fill percentage closely tracking the ground truth (maximum deviation of ~2.9% at t=3). Errors remain stable and do not diverge over time, demonstrating robust autoregressive rollout even with a training set of only 20 samples.
+
+
+
 ## Prerequisites
 
 **Data**: Transient CFD simulation results exported as VTP files containing static mesh coordinates and time-varying `epoxy_vof` fields.

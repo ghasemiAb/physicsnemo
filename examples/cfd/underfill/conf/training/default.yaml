@@ -18,18 +18,16 @@
 # │                   Data                    │
 # └───────────────────────────────────────────┘  
 
-#raw_data_dir:  "/code/aghasemi/isv/ansys/data/converted_output_singleVTU-VTP/train"  # TODO change
-raw_data_dir:  "/workspace/aghasemi/isv/ansys/data/converted_output_singleVTU-VTP2/train_all"
-raw_data_dir_validation:  "/workspace/aghasemi/isv/ansys/data/converted_output_singleVTU-VTP2/val" 
+raw_data_dir:  "/workspace/data/train"
+raw_data_dir_validation:  "/workspace/data/val" 
 max_workers_preprocessing: 64  # Maximum parallel workers
-debug: False
+debug: True # Debug mode (verbose output)
 
 # ┌───────────────────────────────────────────┐
 # │                 Training                  │
 # └───────────────────────────────────────────┘  
-epochs: 1201
-num_time_steps: 10
-# Performance
+epochs: 1601
+num_time_steps: 20
 amp: true             # Automatic Mixed Precision
 use_apex: false       # Use Apex FusedAdam if available
 num_dataloader_workers: 8
@@ -38,8 +36,6 @@ end_lr:  0.000001
 scheduler_T0: 50       # restart period in epochs (first cycle length)
 scheduler_T_mult: 2    # multiply period by this factor after each restart
 
-
-# Training settings
 num_samples: 23
 num_validation_samples: 5
 validation_freq: 25
@@ -54,5 +50,5 @@ interface_mask:
 
 ckpt_path: "./checkpoints"
 tensorboard_log_dir: ./tensorboard_logs
-# Debug mode (verbose output for first batch)
+
 

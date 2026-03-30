@@ -16,5 +16,5 @@
 
 output_dir_pred: "./predicted_vtps"
 output_dir_exact: "./exact_vtps"
-raw_data_dir_test: "/workspace/aghasemi/isv/ansys/data/converted_output_singleVTU-VTP2/val"
+raw_data_dir_test: "/workspace/data/val"
 #raw_data_dir_test: raw_data_dir_test:"/workspace/isv/ansys/data/converted_output_singleVTU-VTP/val"

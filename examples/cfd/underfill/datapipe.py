@@ -9,10 +9,31 @@ Loads VTP files containing:
 
 Output format (per sample):
     - node_features["coords"]:   [N, 3] normalized coordinates at t=0
-    - node_features["features"]: [N, 1] normalized epoxy_vof at t=0
-    - node_target:               [N, T-1] normalized future epoxy_vof (t=1 to T-1)
+    - node_features["features"]: [N, 1] epoxy_vof at t=0 (raw, unnormalized)
+    - node_target:               [N, T-1] future epoxy_vof (t=1 to T-1, raw)
 
 Where T = num_steps (total timesteps including initial).
+
+Note on VOF normalization:
+    Feature (epoxy_vof) normalization is intentionally set to identity
+    (mean=0, std=1) so that the model operates on raw VOF values in [0, 1].
+    Empirically, the dataset has mean ≈ 0.510 and std ≈ 0.485, which is
+    close to a 50/50 bimodal distribution of 0s and 1s. Since the data is
+    already in a well-scaled range and the affine transform would be nearly
+    symmetric (mapping [0,1] → [−1.05, +1.01]), the benefit of z-score
+    normalization is marginal. Keeping raw values simplifies post-processing
+    (clamping, thresholding) and maintains physical interpretability.
+
+    To re-enable VOF normalization, set USE_VOF_NORMALIZATION = True below
+    and ensure that inference.py denormalization remains consistent.
+
+Note on stats directory:
+    Normalization statistics are saved to and loaded from a ``stats/``
+    subdirectory inside the Hydra output directory (``hydra.run.dir``).
+    With the default config (``hydra.run.dir: ./outputs/``,
+    ``hydra.job.chdir: True``), this resolves to ``./outputs/stats/``,
+    keeping stats co-located with checkpoints, logs, and predictions.
+    The path can be overridden via the ``stats_dir`` constructor argument.
 """
 
 import os
@@ -34,9 +55,14 @@ NODE_STATS_FILE = "node_stats.json"
 FEATURE_STATS_FILE = "feature_stats.json"
 EPS = 1e-8
 
+# Set to True to enable z-score normalization of VOF values.
+# When False, feature_stats are identity (mean=0, std=1) making
+# normalization a no-op. See module docstring for rationale.
+USE_VOF_NORMALIZATION = False
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# JSON Utilities 
+# JSON Utilities
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def save_json(data: dict, filepath: str) -> None:
@@ -58,51 +84,43 @@ def load_json(filepath: str) -> dict:
 def _to_python_native(value: Any) -> Any:
     """
     Recursively convert tensor/numpy values to Python native types.
-    
+
     This ensures JSON serialization works without any numpy/torch dependencies.
-    
+
     Args:
         value: Any value (tensor, numpy array, list, dict, scalar, etc.)
-        
+
     Returns:
         Python native type (list, dict, float, int, etc.)
     """
     if isinstance(value, torch.Tensor):
-        # Convert tensor to Python list
         return value.detach().cpu().tolist()
     elif isinstance(value, np.ndarray):
-        # Convert numpy array to Python list
         return value.tolist()
     elif isinstance(value, (np.floating, np.float32, np.float64)):
-        # Convert numpy float to Python float
         return float(value)
     elif isinstance(value, (np.integer, np.int32, np.int64)):
-        # Convert numpy int to Python int
         return int(value)
     elif isinstance(value, dict):
-        # Recursively convert dict values
         return {k: _to_python_native(v) for k, v in value.items()}
     elif isinstance(value, (list, tuple)):
-        # Recursively convert list/tuple elements
         return [_to_python_native(v) for v in value]
     elif hasattr(value, 'item'):
-        # Handle any other type with .item() method (scalars)
         return value.item()
     else:
-        # Already a Python native type
         return value
 
 
 def _to_tensor(value: Any, dtype: torch.dtype = torch.float32) -> torch.Tensor:
     """
     Safely convert a value to a torch tensor.
-    
+
     Handles: torch.Tensor, numpy.ndarray, list, scalar values.
-    
+
     Args:
         value: Input value to convert
         dtype: Target dtype
-        
+
     Returns:
         torch.Tensor
     """
@@ -119,10 +137,10 @@ def _to_tensor(value: Any, dtype: torch.dtype = torch.float32) -> torch.Tensor:
 def _to_numpy(value: Any) -> np.ndarray:
     """
     Safely convert a value to a numpy array.
-    
+
     Args:
         value: Input value (tensor, array, list, etc.)
-        
+
     Returns:
         numpy.ndarray
     """
@@ -137,10 +155,10 @@ def _to_numpy(value: Any) -> np.ndarray:
 def _stats_to_serializable(stats: dict) -> dict:
     """
     Convert stats dict to JSON-serializable format (pure Python types).
-    
+
     Args:
         stats: Dictionary with tensor/array values
-        
+
     Returns:
         Dictionary with Python native types (lists, floats)
     """
@@ -150,15 +168,55 @@ def _stats_to_serializable(stats: dict) -> dict:
 def _stats_from_serializable(stats: dict, dtype: torch.dtype = torch.float32) -> dict:
     """
     Convert stats dict from JSON format back to tensors.
-    
+
     Args:
         stats: Dictionary (with list values from JSON)
         dtype: Target tensor dtype
-        
+
     Returns:
         Dictionary with tensor values
     """
     return {k: _to_tensor(v, dtype=dtype) for k, v in stats.items()}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Stats Directory Resolution
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _resolve_stats_dir(stats_dir: Optional[str] = None) -> str:
+    """
+    Resolve the stats directory to a stable absolute path.
+
+    Resolution order:
+      1. Explicit ``stats_dir`` if provided (from config override).
+      2. ``<hydra.run.dir>/stats/`` via Hydra's runtime config.
+         With default config (``hydra.run.dir: ./outputs/``), this
+         resolves to ``<project>/outputs/stats/``.
+      3. ``./stats/`` as fallback when not running under Hydra
+         (e.g., unit tests, notebooks).
+
+    Using Hydra's output directory rather than relying on ``os.getcwd()``
+    ensures that training, validation, and inference always find the same
+    stats files, even if ``hydra.job.chdir`` is changed to False or
+    ``hydra.run.dir`` is modified.
+
+    Args:
+        stats_dir: Explicit override path, or None for auto-resolution.
+
+    Returns:
+        Absolute path to the stats directory.
+    """
+    if stats_dir is not None:
+        return os.path.abspath(stats_dir)
+
+    # Derive from Hydra's output directory when available
+    try:
+        from hydra.core.hydra_config import HydraConfig
+        hydra_output = HydraConfig.get().runtime.output_dir
+        return os.path.abspath(os.path.join(hydra_output, STATS_DIRNAME))
+    except Exception:
+        # Not running under Hydra (unit tests, notebooks, standalone scripts)
+        return os.path.abspath(STATS_DIRNAME)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -168,13 +226,13 @@ def _stats_from_serializable(stats: dict, dtype: torch.dtype = torch.float32) ->
 class SimSample:
     """
     Point cloud sample for Transolver (no graph structure).
-    
+
     Attributes:
         node_features: Dictionary containing:
             - "coords":   [N, 3] static mesh coordinates (normalized)
-            - "features": [N, 1] epoxy_vof at t=0 (normalized)
-        node_target: [N, T-1] future epoxy_vof values (normalized)
-    
+            - "features": [N, 1] epoxy_vof at t=0 (raw unless USE_VOF_NORMALIZATION)
+        node_target: [N, T-1] future epoxy_vof values
+
     Used by:
         - rollout.py: Accesses node_features["coords"] and node_features["features"]
         - train.py: Accesses node_target for loss computation
@@ -223,17 +281,17 @@ class SimSample:
 class UnderfillDataset:
     """
     Dataset for Transolver training on transient epoxy VOF prediction.
-    
+
     Handles:
         - Loading VTP files with static mesh and time-varying epoxy_vof
         - Computing normalization statistics (saved for validation/inference)
         - Preparing input/target pairs for autoregressive training
-    
+
     Expected VTP data format:
         - coords: [N, 3]
         - epoxy_vof: [T, N, 1] with T timesteps
-    
-    Statistics exposed (used by train.py):
+
+    Statistics exposed (used by train.py and inference.py):
         - node_stats: {"pos_mean": [3], "pos_std": [3]}
         - feature_stats: {"feature_mean": [1], "feature_std": [1]}
     """
@@ -251,11 +309,12 @@ class UnderfillDataset:
         logger=None,
         dt: float = 5e-3,
         debug: bool = False,
+        stats_dir: Optional[str] = None,
         **kwargs
     ):
         """
         Initialize dataset.
-        
+
         Args:
             name: Dataset name for logging
             reader: VTP reader callable (default: vtp_reader.Reader)
@@ -266,6 +325,9 @@ class UnderfillDataset:
             logger: Logger instance
             dt: Time step size (for reference, not used in computation)
             debug: Enable verbose output
+            stats_dir: Explicit path for normalization statistics directory.
+                       If None (default), resolves to ``<hydra.run.dir>/stats/``
+                       (i.e., ``./outputs/stats/`` with the default config).
         """
         self.name = name
         self.data_dir = data_dir or "."
@@ -286,10 +348,13 @@ class UnderfillDataset:
         self._log(f"  Num steps:   {self.num_steps} (T)")
         self._log(f"  Rollout:     {self.num_steps - 1} steps (T-1)")
         self._log(f"  Feature:     epoxy_vof (scalar)")
+        self._log(f"  VOF norm:    {'z-score' if USE_VOF_NORMALIZATION else 'identity (no-op)'}")
 
-        # Create stats directory
-        self._stats_dir = STATS_DIRNAME
+        # Resolve stats directory to a stable absolute path.
+        # Default: <hydra.run.dir>/stats/ → ./outputs/stats/
+        self._stats_dir = _resolve_stats_dir(stats_dir)
         os.makedirs(self._stats_dir, exist_ok=True)
+        self._log(f"  Stats dir:   {self._stats_dir}")
 
         # Initialize reader
         if reader is None:
@@ -311,7 +376,7 @@ class UnderfillDataset:
         self.epoxy_vof_seq: list[torch.Tensor] = []   # List of [T, N, 1]
 
         self._log(f"\n  Processing {len(point_data)} records...")
-        
+
         for i, rec in enumerate(point_data):
             self._process_record(i, rec)
 
@@ -338,21 +403,19 @@ class UnderfillDataset:
     def _process_record(self, idx: int, rec: dict):
         """
         Process a single VTP record.
-        
+
         Args:
             idx: Record index
             rec: Dictionary with "coords" [N, 3] and "epoxy_vof" [T, N, 1]
         """
-        # Extract coordinates - handle both numpy and tensor
         coords = _to_numpy(rec["coords"])  # [N, 3]
         N_nodes = coords.shape[0]
 
-        # Extract epoxy_vof
         if "epoxy_vof" not in rec:
             raise ValueError(f"Record {idx} missing 'epoxy_vof' field")
-        
+
         epoxy_vof = _to_numpy(rec["epoxy_vof"])  # [T_file, N, 1]
-        
+
         T_file = epoxy_vof.shape[0]
         T = min(T_file, self.num_steps)
 
@@ -373,52 +436,78 @@ class UnderfillDataset:
                   f"range [{epoxy_vof_sliced.min():.4f}, {epoxy_vof_sliced.max():.4f}]")
 
     def _setup_statistics(self):
-        """Compute or load normalization statistics."""
+        """Compute or load normalization statistics.
+
+        Position (coordinate) statistics are always computed via z-score
+        normalization since coordinate ranges vary across geometries.
+
+        VOF feature statistics are controlled by USE_VOF_NORMALIZATION:
+          - False (default): identity transform (mean=0, std=1). VOF values
+            remain in their natural [0, 1] range. This is appropriate because
+            the data is bimodal (mean ≈ 0.51, std ≈ 0.49) and already
+            well-scaled. Raw values simplify clamping and thresholding.
+          - True: z-score normalization computed from training data. Maps
+            [0, 1] → [≈ −1.05, ≈ +1.01]. May improve convergence if the
+            model architecture benefits from zero-centered inputs.
+
+        Statistics are stored in self._stats_dir (absolute path resolved
+        from hydra.run.dir), ensuring training, validation, and inference
+        always reference the same files.
+        """
         node_stats_path = os.path.join(self._stats_dir, NODE_STATS_FILE)
         feat_stats_path = os.path.join(self._stats_dir, FEATURE_STATS_FILE)
 
         if self.split == "train":
             self._log("\n  Computing statistics from training data...")
             self.node_stats = self._compute_node_stats()
-            #self.feature_stats = self._compute_feature_stats()
-            # Hardcode feature stats to make normalization a no-op
-            self.feature_stats = {
-                "feature_mean": torch.zeros(1, dtype=torch.float32),
-                "feature_std": torch.ones(1, dtype=torch.float32),
-            }
-            
-            # Save for validation/inference (convert to pure Python types)
-            node_stats_serializable = _stats_to_serializable(self.node_stats)
-            feat_stats_serializable = _stats_to_serializable(self.feature_stats)
-            
-            save_json(node_stats_serializable, node_stats_path)
-            save_json(feat_stats_serializable, feat_stats_path)
+
+            if USE_VOF_NORMALIZATION:
+                self.feature_stats = self._compute_feature_stats()
+                self._log("  VOF normalization: z-score (computed from data)")
+            else:
+                self.feature_stats = self._identity_feature_stats()
+                self._log("  VOF normalization: identity (no-op)")
+
+            # Save for validation/inference
+            save_json(_stats_to_serializable(self.node_stats), node_stats_path)
+            save_json(_stats_to_serializable(self.feature_stats), feat_stats_path)
             self._log(f"  Saved statistics to {self._stats_dir}/")
-            
+
         else:
             # Load from saved training stats
             if os.path.exists(node_stats_path) and os.path.exists(feat_stats_path):
                 self._log(f"\n  Loading statistics from {self._stats_dir}/")
                 self.node_stats = _stats_from_serializable(load_json(node_stats_path))
-                #self.feature_stats = _stats_from_serializable(load_json(feat_stats_path))
-                # Hardcode feature stats to make normalization a no-op
-                self.feature_stats = {
-                    "feature_mean": torch.zeros(1, dtype=torch.float32),
-                    "feature_std": torch.ones(1, dtype=torch.float32),
-                }
-            else:
-                self._log("\n  WARNING: No saved statistics found, computing from current split")
-                self._log("           Run training first to generate statistics!")
-                self.node_stats = self._compute_node_stats()
-                #self.feature_stats = self._compute_feature_stats()
-                # Hardcode feature stats to make normalization a no-op
-                self.feature_stats = {
-                    "feature_mean": torch.zeros(1, dtype=torch.float32),
-                    "feature_std": torch.ones(1, dtype=torch.float32),
-                }
 
-        # Log statistics
-#        self._log_statistics()
+                if USE_VOF_NORMALIZATION:
+                    self.feature_stats = _stats_from_serializable(load_json(feat_stats_path))
+                    self._log("  VOF normalization: z-score (loaded from file)")
+                else:
+                    self.feature_stats = self._identity_feature_stats()
+                    self._log("  VOF normalization: identity (no-op)")
+            else:
+                self._log(f"\n  WARNING: No saved statistics found at {self._stats_dir}/")
+                self._log("           Expected files:")
+                self._log(f"             {node_stats_path}")
+                self._log(f"             {feat_stats_path}")
+                self._log("           Run training first to generate statistics!")
+                self._log("           Computing from current split as fallback.")
+                self.node_stats = self._compute_node_stats()
+
+                if USE_VOF_NORMALIZATION:
+                    self.feature_stats = self._compute_feature_stats()
+                else:
+                    self.feature_stats = self._identity_feature_stats()
+
+        self._log_statistics()
+
+    @staticmethod
+    def _identity_feature_stats() -> dict:
+        """Return identity (no-op) feature statistics: mean=0, std=1."""
+        return {
+            "feature_mean": torch.zeros(1, dtype=torch.float32),
+            "feature_std": torch.ones(1, dtype=torch.float32),
+        }
 
     def _log_statistics(self):
         """Log the computed/loaded statistics."""
@@ -426,17 +515,16 @@ class UnderfillDataset:
         pos_std = self.node_stats['pos_std']
         feat_mean = self.feature_stats['feature_mean']
         feat_std = self.feature_stats['feature_std']
-        
-        self._log(f"\n  Statistics:")
-        
-        # Handle both tensor and list formats
+
+        self._log(f"\n  Statistics (from {self._stats_dir}):")
+
         if isinstance(pos_mean, torch.Tensor):
             self._log(f"    pos_mean:     [{pos_mean[0].item():.6f}, {pos_mean[1].item():.6f}, {pos_mean[2].item():.6f}]")
             self._log(f"    pos_std:      [{pos_std[0].item():.6f}, {pos_std[1].item():.6f}, {pos_std[2].item():.6f}]")
         else:
             self._log(f"    pos_mean:     {pos_mean}")
             self._log(f"    pos_std:      {pos_std}")
-            
+
         if isinstance(feat_mean, torch.Tensor):
             self._log(f"    feature_mean: {feat_mean.item():.6f}")
             self._log(f"    feature_std:  {feat_std.item():.6f}")
@@ -444,33 +532,45 @@ class UnderfillDataset:
             self._log(f"    feature_mean: {feat_mean}")
             self._log(f"    feature_std:  {feat_std}")
 
+        if not USE_VOF_NORMALIZATION:
+            self._log(f"    (VOF normalization is identity — model sees raw [0, 1] values)")
+
     def _compute_node_stats(self) -> dict:
         """Compute position statistics over all samples and time steps."""
-        # Flatten all positions: [Total_points, 3]
         all_pos = torch.cat([p.reshape(-1, 3) for p in self.mesh_pos_seq], dim=0)
-        
+
         mean = torch.mean(all_pos, dim=0)
         std = torch.std(all_pos, dim=0)
-        std = torch.clamp(std, min=EPS)  # Prevent division by zero
-        
+        std = torch.clamp(std, min=EPS)
+
         return {"pos_mean": mean, "pos_std": std}
 
     def _compute_feature_stats(self) -> dict:
-        """Compute epoxy_vof statistics over all samples and time steps."""
-        # Flatten all epoxy_vof: [Total_points, 1]
+        """Compute epoxy_vof statistics over all samples and time steps.
+
+        Used when USE_VOF_NORMALIZATION is True. Maps VOF from [0, 1] to
+        approximately [-1, +1] via z-score normalization.
+
+        When USE_VOF_NORMALIZATION is False (default), this method is not
+        called and identity stats (mean=0, std=1) are used instead.
+        """
         all_vof = torch.cat([f.reshape(-1, 1) for f in self.epoxy_vof_seq], dim=0)
-        
+
         mean = torch.mean(all_vof, dim=0)
         std = torch.std(all_vof, dim=0)
-        std = torch.clamp(std, min=EPS)  # Prevent division by zero
-        
+        std = torch.clamp(std, min=EPS)
+
         return {"feature_mean": mean, "feature_std": std}
 
     def _apply_normalization(self):
-        """Apply normalization to all loaded data."""
+        """Apply normalization to all loaded data.
+
+        Coordinates are always z-score normalized.
+        VOF values are normalized only if USE_VOF_NORMALIZATION is True;
+        otherwise the identity transform is applied (no change).
+        """
         self._log("\n  Applying normalization...")
 
-        # Ensure stats are tensors
         pos_mean = _to_tensor(self.node_stats["pos_mean"])
         pos_std = _to_tensor(self.node_stats["pos_std"])
         feat_mean = _to_tensor(self.feature_stats["feature_mean"])
@@ -478,16 +578,15 @@ class UnderfillDataset:
 
         for i in range(len(self.mesh_pos_seq)):
             # Normalize positions: [T, N, 3]
-            # Formula: x_norm = (x - mean) / std
             self.mesh_pos_seq[i] = (
-                (self.mesh_pos_seq[i] - pos_mean.view(1, 1, -1)) 
+                (self.mesh_pos_seq[i] - pos_mean.view(1, 1, -1))
                 / pos_std.view(1, 1, -1)
             )
-            
+
             # Normalize epoxy_vof: [T, N, 1]
-            # Formula: vof_norm = (vof - mean) / std
+            # When USE_VOF_NORMALIZATION is False, this is (x - 0) / 1 = x
             self.epoxy_vof_seq[i] = (
-                (self.epoxy_vof_seq[i] - feat_mean.view(1, 1, -1)) 
+                (self.epoxy_vof_seq[i] - feat_mean.view(1, 1, -1))
                 / feat_std.view(1, 1, -1)
             )
 
@@ -501,21 +600,23 @@ class UnderfillDataset:
         self._log(f"  Target steps:      {self.num_steps - 1} (T-1)")
         self._log(f"  Feature:           epoxy_vof")
         self._log(f"  Feature dimension: {self.NUM_FEATURES}")
+        self._log(f"  VOF normalization: {'z-score' if USE_VOF_NORMALIZATION else 'identity (no-op)'}")
+        self._log(f"  Stats directory:   {self._stats_dir}")
 
         if self.length > 0:
             sample = self[0]
             N = sample.node_features['coords'].shape[0]
-            
+
             self._log(f"\n  Sample 0 shapes:")
             self._log(f"    coords:   {sample.node_features['coords'].shape}  (expected: [N, 3])")
             self._log(f"    features: {sample.node_features['features'].shape}  (expected: [N, 1])")
             self._log(f"    target:   {sample.node_target.shape}  (expected: [N, T-1])")
-            
+
             # Verify dimensions match expectations
             T_target = self.num_steps - 1
             expected_target = (N, T_target)
             actual_target = tuple(sample.node_target.shape)
-            
+
             if actual_target == expected_target:
                 self._log(f"\n  ✓ All shapes correct")
             else:
@@ -531,16 +632,16 @@ class UnderfillDataset:
     def __getitem__(self, idx: int) -> SimSample:
         """
         Get a sample for training/inference.
-        
+
         Args:
             idx: Sample index
-            
+
         Returns:
             SimSample with:
                 - node_features["coords"]: [N, 3] normalized coordinates
-                - node_features["features"]: [N, 1] normalized VOF at t=0
-                - node_target: [N, T-1] normalized future VOF values
-        
+                - node_features["features"]: [N, 1] VOF at t=0
+                - node_target: [N, T-1] future VOF values
+
         Shape flow:
             pos_seq:  [T, N, 3] -> coords:   [N, 3] (take t=0)
             vof_seq:  [T, N, 1] -> features: [N, 1] (take t=0)
@@ -559,7 +660,7 @@ class UnderfillDataset:
         T = vof_seq.shape[0]
         if T > 1:
             # vof_seq[1:] -> [T-1, N, 1]
-            # squeeze(-1) -> [T-1, N]  
+            # squeeze(-1) -> [T-1, N]
             # transpose   -> [N, T-1]
             node_target = vof_seq[1:].squeeze(-1).transpose(0, 1)
         else:
@@ -577,9 +678,10 @@ class UnderfillDataset:
 def simsample_collate(batch: list[SimSample]) -> list[SimSample]:
     """
     Custom collate function - returns list of SimSamples.
-    
+
     Since samples may have different numbers of nodes (N varies),
     we cannot stack them into a single tensor. Instead, we return
     the list and process samples individually in the training loop.
     """
     return batch
+

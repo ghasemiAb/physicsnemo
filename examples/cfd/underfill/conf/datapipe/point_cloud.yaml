@@ -17,6 +17,7 @@
 _target_: datapipe.UnderfillDataset
 _convert_: all
 data_dir: ${training.raw_data_dir}
+stats_dir: null  # Default: <hydra.run.dir>/stats/ (i.e., ./outputs/stats/)
 num_samples: ${training.num_samples}
 num_steps: ${training.num_time_steps}
 dt: 5e-3

@@ -46,7 +46,7 @@ class TimestepStats:
     min_val: float
     max_val: float
     filled_pct: float  # % of points with VOF > 0.5
-    
+
     @classmethod
     def from_array(cls, arr: np.ndarray, threshold: float = 0.5) -> "TimestepStats":
         arr = arr.flatten()
@@ -101,7 +101,7 @@ def print_prediction_stats_row(
 ):
     """Print a single row of prediction statistics."""
     pred_range = f"[{pred_stats.min_val:.2f},{pred_stats.max_val:.2f}]"
-    
+
     if gt_stats is not None:
         gt_range = f"[{gt_stats.min_val:.2f},{gt_stats.max_val:.2f}]"
         print(f"  │ t={timestep:2d}   │ {pred_stats.mean:7.4f} │ {pred_stats.std:7.4f} │{pred_range:>8}│{pred_stats.filled_pct:5.1f}%│"
@@ -130,14 +130,14 @@ def print_summary_stats(
     print("  │                    OVERALL STATISTICS                           │")
     print("  ├─────────────────────────────────────────────────────────────────┤")
     print(f"  │  Total timesteps predicted:  {num_timesteps:<32} │")
-    
+
     if has_ground_truth:
         print(f"  │  Mean Absolute Error (MAE):  {total_mae:<32.6f} │")
         print(f"  │  Root Mean Square Error:     {total_rmse:<32.6f} │")
         print(f"  │  Mean Square Error (MSE):    {total_mse:<32.6f} │")
     else:
         print(f"  │  Ground truth:               {'Not available':<32} │")
-    
+
     print("  └─────────────────────────────────────────────────────────────────┘")
 
 
@@ -204,7 +204,14 @@ def save_vtp_predictions(
 ) -> dict:
     """
     Save predicted VOF values to VTP files, preserving mesh structure.
-    
+
+    Ground-truth resolution order:
+      1. Dataset-provided ``gt_seq`` (denormalized tensor list).
+      2. VOF arrays found inside the source VTP file on disk.
+
+    Only the first source that succeeds is used so that statistics are
+    never double-counted.
+
     Returns:
         Dictionary with statistics for logging.
     """
@@ -213,32 +220,32 @@ def save_vtp_predictions(
     coords_np = coords.detach().cpu().numpy()
     N = coords_np.shape[0]
     T = len(preds)
-    
+
     # Statistics storage
     all_pred_stats = []
     all_gt_stats = []
     all_mae = []
     all_rmse = []
     gt_available_count = 0
-    
+
     # Try to find reference mesh
     reference_mesh = None
     reference_file = os.path.join(source_dir, f"{prefix}_000.vtp")
-    
+
     if os.path.exists(reference_file):
         try:
             reference_mesh = pv.read(reference_file)
         except Exception as e:
             logging.warning(f"Could not read reference mesh: {e}")
-    
+
     # Print statistics header
     if verbose:
         print_prediction_stats_header()
-    
+
     for t in range(T):
         timestep = t + 1
         pred_np = preds[t].detach().cpu().numpy().squeeze(-1)
-        
+
         if pred_np.shape[0] != N:
             logging.warning(f"Point mismatch at t={timestep}")
             continue
@@ -246,16 +253,17 @@ def save_vtp_predictions(
         # Compute prediction statistics
         pred_stats = TimestepStats.from_array(pred_np)
         all_pred_stats.append(pred_stats)
-        
-        # Try to read source file
+
+        # Try to read source file (always, for mesh structure)
         source_file = os.path.join(source_dir, f"{prefix}_{timestep:03d}.vtp")
-        
+
         mesh = None
         gt_np = None
         gt_stats = None
         mae = None
         rmse = None
-        # Prefer dataset-provided ground truth if available
+
+        # ── Ground-truth source 1: dataset-provided gt_seq ──────────────
         if compute_error and gt_seq is not None and len(gt_seq) >= timestep:
             try:
                 gt_np = gt_seq[t].detach().cpu().numpy().squeeze()
@@ -269,41 +277,40 @@ def save_vtp_predictions(
                 gt_available_count += 1
             except Exception:
                 pass
-        
+
+        # ── Load source VTP for mesh structure (and fallback GT) ────────
         if os.path.exists(source_file):
             try:
                 mesh = pv.read(source_file)
-                
+
                 if mesh.n_points != N:
                     mesh = None
-                else:
-                    # Extract ground truth
-                    #if compute_error:
-                    if True:
-                        for key in ["epoxy_vof", f"epoxy_vof_step{timestep:02d}", "vof"]:
-                            if key in mesh.point_data:
-                                gt_np = np.array(mesh.point_data[key]).squeeze()
-                                break
-                        
-                        if gt_np is not None and gt_np.shape[0] == N:
-                            gt_stats = TimestepStats.from_array(gt_np)
-                            all_gt_stats.append(gt_stats)
-                            
-                            # Compute errors
-                            error = pred_np - gt_np
-                            mae = float(np.abs(error).mean())
-                            rmse = float(np.sqrt((error ** 2).mean()))
-                            all_mae.append(mae)
-                            all_rmse.append(rmse)
-                            gt_available_count += 1
-                            
+                elif gt_stats is None and compute_error:
+                    # Fall back to extracting ground truth from VTP file
+                    for key in ["epoxy_vof", f"epoxy_vof_step{timestep:02d}", "vof"]:
+                        if key in mesh.point_data:
+                            gt_np = np.array(mesh.point_data[key]).squeeze()
+                            break
+
+                    if gt_np is not None and gt_np.shape[0] == N:
+                        gt_stats = TimestepStats.from_array(gt_np)
+                        all_gt_stats.append(gt_stats)
+
+                        # Compute errors
+                        error = pred_np - gt_np
+                        mae = float(np.abs(error).mean())
+                        rmse = float(np.sqrt((error ** 2).mean()))
+                        all_mae.append(mae)
+                        all_rmse.append(rmse)
+                        gt_available_count += 1
+
             except Exception as e:
                 logging.warning(f"Could not read source mesh {source_file}: {e}")
-        
+
         # Print row statistics
         if verbose:
             print_prediction_stats_row(timestep, pred_stats, gt_stats, mae, rmse)
-        
+
         # Prepare mesh for saving
         if mesh is None:
             if reference_mesh is not None and reference_mesh.n_points == N:
@@ -314,7 +321,7 @@ def save_vtp_predictions(
         # Clear and add point data
         mesh.point_data.clear()
         mesh.point_data["epoxy_vof_pred"] = pred_np
-        
+
         if gt_np is not None and gt_np.shape[0] == N:
             mesh.point_data["epoxy_vof_exact"] = gt_np
             mesh.point_data["epoxy_vof_error"] = pred_np - gt_np
@@ -323,23 +330,23 @@ def save_vtp_predictions(
         # Save
         out_file = os.path.join(output_dir, f"{prefix}_{timestep:03d}_pred.vtp")
         mesh.save(out_file)
-    
+
     # Print footer
     if verbose:
         print_prediction_stats_footer()
-    
+
     # Compute overall statistics
     stats = {
         "num_timesteps": T,
         "gt_available_count": gt_available_count,
         "has_ground_truth": gt_available_count > 0,
     }
-    
+
     if gt_available_count > 0:
         stats["total_mae"] = float(np.mean(all_mae))
         stats["total_rmse"] = float(np.mean(all_rmse))
         stats["total_mse"] = float(np.mean([r**2 for r in all_rmse]))
-    
+
     return stats
 
 
@@ -359,7 +366,7 @@ class InferenceWorker:
         # Print initialization header
         if dist.rank == 0:
             print_header("TRANSOLVER VOF INFERENCE")
-        
+
         # Build and load model
         self.model = instantiate(cfg.model)
         logging.getLogger().setLevel(logging.INFO)
@@ -368,7 +375,7 @@ class InferenceWorker:
 
         ckpt_path = cfg.training.ckpt_path
         load_checkpoint(ckpt_path, models=self.model, device=self.device)
-        
+
         # Configuration
         self.vtp_prefix = cfg.inference.get("vtp_prefix", "frame")
         self.write_vtp = cfg.inference.get("write_vtp", True)
@@ -396,10 +403,10 @@ class InferenceWorker:
     def run_on_single_run(self, run_path: str):
         """Process a single run directory."""
         run_name = os.path.basename(run_path)
-        
+
         if self.verbose:
             print_subheader(f"Processing Run: {run_name}")
-        
+
         self.logger.info(f"[Rank {self.dist.rank}] Processing run: {run_name}")
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -452,7 +459,7 @@ class InferenceWorker:
                 # Get input statistics
                 input_vof = sample.node_features["features"].cpu().numpy().flatten()
                 input_vof_denorm = (input_vof * vof_std.cpu().item() + vof_mean.cpu().item())
-                
+
                 if self.verbose:
                     print("\n  Input (t=0) Statistics:")
                     print(f"    VOF mean:  {input_vof_denorm.mean():.6f}")
@@ -463,7 +470,7 @@ class InferenceWorker:
                 # Forward rollout
                 if self.verbose:
                     print("\n  Running autoregressive rollout...")
-                
+
                 pred_seq = self.model(sample=sample, data_stats=data_stats)
 
                 # Denormalize
@@ -492,7 +499,7 @@ class InferenceWorker:
                     out_dir = os.path.join(
                         self.output_dir, f"rank{self.dist.rank}", run_name
                     )
-                    
+
                     stats = save_vtp_predictions(
                         coords=coords,
                         preds=pred_seq_denorm,
@@ -513,7 +520,7 @@ class InferenceWorker:
                             num_timesteps=stats["num_timesteps"],
                             has_ground_truth=stats["has_ground_truth"],
                         )
-                        
+
                         print_run_summary(
                             run_name=run_name,
                             num_points=N,
@@ -543,7 +550,7 @@ def main(cfg: DictConfig):
 
     # Discover run directories
     parent_dir = to_absolute_path(cfg.inference.raw_data_dir_test)
-    
+
     if not os.path.isdir(parent_dir):
         logger0.error(f"Parent directory not found: {parent_dir}")
         return
@@ -572,11 +579,11 @@ def main(cfg: DictConfig):
 
     # Distribute runs across ranks
     my_runs = run_dirs[dist.rank :: dist.world_size]
-    
+
     if dist.rank == 0:
         print(f"\n  Distribution across {dist.world_size} rank(s):")
         print(f"    Rank {dist.rank}: {len(my_runs)} run(s) assigned")
-    
+
     logger.info(f"[Rank {dist.rank}] Assigned {len(my_runs)} runs.")
 
     # Create worker and process
@@ -594,7 +601,7 @@ def main(cfg: DictConfig):
         print(f"  │  ✓ Successfully processed {len(my_runs)} run(s){' ' * 35}│")
         print(f"  │  ✓ Output saved to: {worker.output_dir:<41} │")
         print(f"  └─────────────────────────────────────────────────────────────────┘\n")
-        
+
     logger0.info("Inference completed successfully.")
 
 
