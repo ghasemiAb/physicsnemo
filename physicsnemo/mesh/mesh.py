@@ -16,7 +16,8 @@
 
 import math
 import types
-from typing import TYPE_CHECKING, Any, Literal, Self, Sequence
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Literal, Self, Sequence, cast
 
 import torch
 import torch.nn.functional as F
@@ -83,6 +84,25 @@ class Mesh:
     - Codimension 1 (triangles in 3D, edges in 2D): unique unit normal (up to sign)
     - Codimension 0 (triangles in 2D, tets in 3D): no normal direction exists
     - Codimension > 1 (edges in 3D): infinitely many normal directions
+
+    **Dimension-Parametrized Types**
+
+    ``Mesh`` supports subscript notation ``Mesh[manifold_dims, spatial_dims]``
+    for type annotations and runtime ``isinstance`` checks::
+
+        def compute_normals(mesh: Mesh[2, 3]) -> torch.Tensor:
+            ...  # accepts only triangle meshes in 3D
+
+        isinstance(mesh, Mesh[2, 3])   # True for triangles in 3D
+        isinstance(mesh, Mesh[1, ...]) # True for any edge mesh
+
+    Use ``...`` (Ellipsis) to leave a dimension unconstrained. The notation
+    also supports ``.boundary`` to derive the boundary type::
+
+        Mesh[2, 3].boundary  # -> Mesh[1, 3]
+
+    See :meth:`__class_getitem__` for the full specification, including
+    symbolic dimension expressions like ``Mesh["n-1", "n"]``.
 
     **Core Data Structure**
 
@@ -196,18 +216,54 @@ class Mesh:
     - **Hexahedra** → split into 5 or 6 tetrahedra each
     - **Polygons/polyhedra** → triangulate/tetrahedralize
 
+    **Immutability**
+
+    ``Mesh`` operations return new instances rather than modifying in place.
+    For example, ``mesh.translate(offset)`` returns a new ``Mesh`` with
+    translated points -- the original ``mesh`` is unchanged. This design
+    enables safe caching of derived geometry (centroids, normals, curvature):
+    cached values remain valid because the underlying ``points`` and ``cells``
+    never change after construction.
+
+    .. important::
+
+       In-place modification of ``points`` or ``cells`` (e.g.,
+       ``mesh.points[0] = ...``) is unsupported and will **silently
+       invalidate** all cached properties. Always construct a new ``Mesh``
+       instead.
+
     **Caching**
 
-    Expensive geometric computations (centroids, areas, normals, etc.) are
-    cached in the ``_cache`` field - a nested TensorDict with ``"cell"`` and
-    ``"point"`` sub-TensorDicts. Access cached values via nested keys::
+    Expensive geometric computations (centroids, areas, normals, curvature,
+    adjacency) are cached in the ``_cache`` field -- a nested ``TensorDict``
+    with ``"cell"``, ``"point"``, and ``"topology"`` sub-dicts. The cache is
+    separate from ``point_data`` / ``cell_data``, so user data is never mixed
+    with internal cached geometry.
+
+    Caches are populated lazily on first access (e.g., the first call to
+    ``mesh.cell_normals`` computes and caches the result; subsequent calls
+    return the cached value). Because ``Mesh`` is effectively immutable (see
+    above), cached values never go stale -- they remain valid for the
+    lifetime of the ``Mesh`` instance.
+
+    Geometric transforms (``translate``, ``rotate``, ``scale``, ``transform``)
+    carry forward applicable cache entries to the new ``Mesh`` rather than
+    discarding them. Topology caches are always preserved (transforms do not
+    change connectivity). Geometric caches (areas, normals, centroids) are
+    re-derived from the transform matrix where possible, avoiding
+    recomputation from raw vertex data.
+
+    Slicing operations (``slice_cells``, ``slice_points``) produce new
+    ``Mesh`` instances with topology caches cleared (since connectivity has
+    changed) but cell-level geometric caches sliced in lockstep.
+
+    Access cached values directly via nested keys::
 
         mesh._cache["cell", "centroids"]   # shape (n_cells, n_dims)
         mesh._cache["point", "normals"]    # shape (n_points, n_dims)
 
-    The cache is separate from ``cell_data`` / ``point_data``, so user data
-    is never mixed with internal cached geometry. To clear all caches,
-    construct a new Mesh without passing ``_cache`` (it defaults to empty).
+    Prefer using properties (``mesh.cell_centroids``, ``mesh.point_normals``)
+    over direct ``_cache`` access.
     """
 
     points: torch.Tensor  # shape: (n_points, n_spatial_dimensions)
@@ -431,10 +487,95 @@ class Mesh:
             ...
 
         def clone(self) -> Self:
-            """Return a shallow clone of this Mesh.
+            """Return a deep clone of this Mesh.
 
-            All tensor storage is shared with the original; metadata and
-            TensorDict structure are independent copies.
+            All tensors are copied (independent storage); the clone can
+            be modified without affecting the original.
+            """
+            ...
+
+        def save(
+            self,
+            prefix: str | Path | None = None,
+            copy_existing: bool = False,
+            *,
+            num_threads: int = 0,
+            return_early: bool = False,
+            share_non_tensor: bool = False,
+        ) -> Self:
+            """Save the mesh to disk as memory-mapped tensors.
+
+            Writes ``points``, ``cells``, ``point_data``, ``cell_data``,
+            ``global_data``, and ``_cache`` to a directory tree of
+            ``.memmap`` files.  Proxy for the tensorclass ``memmap()``
+            method.
+
+            This is the recommended serialization method. Compared to
+            ``torch.save`` (pickle-based), memmap serialization is
+            faster (parallel I/O across files), safer (no arbitrary code
+            execution on load), and supports partial loading.
+
+            Parameters
+            ----------
+            prefix : str, Path, or None
+                Directory path where the memory-mapped files will be
+                written.  If ``None``, a temporary directory is used.
+            copy_existing : bool
+                If ``True``, copy tensors that are already memory-mapped
+                to the new location.
+            num_threads : int
+                Number of threads for parallel I/O (0 = sequential).
+            return_early : bool
+                If ``True``, return before all data is flushed to disk.
+            share_non_tensor : bool
+                If ``True``, share non-tensor data across processes.
+
+            Returns
+            -------
+            Mesh
+                A new Mesh backed by the on-disk memory-mapped storage.
+
+            Examples
+            --------
+            >>> mesh.save("/path/to/mesh")  # doctest: +SKIP
+            >>> reloaded = Mesh.load("/path/to/mesh")  # doctest: +SKIP
+            """
+            ...
+
+        @classmethod
+        def load(
+            cls,
+            prefix: str | Path,
+            device: torch.device | None = None,
+            non_blocking: bool = False,
+        ) -> Self:
+            """Load a previously saved mesh from disk.
+
+            Reads a directory tree of memory-mapped tensors written by
+            :meth:`save` and reconstructs the ``Mesh`` instance,
+            including all attached ``point_data``, ``cell_data``, and
+            ``global_data``.  Proxy for the tensorclass
+            ``load_memmap()`` class method.
+
+            Parameters
+            ----------
+            prefix : str or Path
+                Path to the directory created by :meth:`save`.
+            device : torch.device or None
+                If provided, move all tensors to this device after
+                loading.
+            non_blocking : bool
+                Whether device transfers should be non-blocking.
+
+            Returns
+            -------
+            Mesh
+                The reconstructed Mesh instance.
+
+            Examples
+            --------
+            >>> mesh = Mesh.load("/path/to/mesh")  # doctest: +SKIP
+            >>> mesh_gpu = Mesh.load("/path/to/mesh", device="cuda")  # doctest: +SKIP
             """
             ...
 
@@ -479,8 +620,8 @@ class Mesh:
         """Compute the centroids (geometric centers) of all cells.
 
         The centroid of a cell is computed as the arithmetic mean of its vertex positions.
-        For an n-simplex with vertices (v0, v1, ..., vn), the centroid is:
-            centroid = (v0 + v1 + ... + vn) / (n + 1)
+        For an n-simplex with vertices (v0, v1, ..., vn), the centroid is
+        ``centroid = (v0 + v1 + ... + vn) / (n + 1)``.
 
         The result is cached in ``_cache["cell", "centroids"]`` for efficiency.
 
@@ -1059,11 +1200,13 @@ class Mesh:
 
         ### Extract valid cells with remapped indices
         new_cells = remapped_cells[valid_cells_mask]
-        new_cell_data: TensorDict = self.cell_data[valid_cells_mask]  # type: ignore
+        # cast: TensorDict[bool_mask] returns TensorCollection | Tensor statically;
+        # the runtime is always TensorDict because cell_data is itself a TensorDict.
+        new_cell_data = cast(TensorDict, self.cell_data[valid_cells_mask])
 
         ### Slice points and point_data
         new_points = self.points[kept_indices]
-        new_point_data: TensorDict = self.point_data[kept_indices]  # type: ignore
+        new_point_data = cast(TensorDict, self.point_data[kept_indices])
 
         return Mesh(
             points=new_points,
@@ -1096,7 +1239,7 @@ class Mesh:
         """
         if isinstance(indices, int):
             indices = torch.tensor([indices], device=self.cells.device)
-        new_cell_data: TensorDict = self.cell_data[indices]  # type: ignore
+        new_cell_data = cast(TensorDict, self.cell_data[indices])
         new_cache = TensorDict(
             {
                 "cell": self._cache["cell"][indices],
@@ -1400,11 +1543,13 @@ class Mesh:
         ----------
         manifold_codimension : int, optional
             Codimension of extracted mesh relative to parent.
+
             - 1: Extract (n-1)-facets (default, immediate boundaries of all cells)
             - 2: Extract (n-2)-facets (e.g., edges from tets, vertices from triangles)
             - k: Extract (n-k)-facets
         data_source : {"points", "cells"}, optional
             Source of data inheritance:
+
             - "cells": Facets inherit from parent cells they bound. When multiple
               cells share a facet, data is aggregated according to data_aggregation.
             - "points": Facets inherit from their boundary vertices. Data from
@@ -1412,12 +1557,14 @@ class Mesh:
         data_aggregation : {"mean", "area_weighted", "inverse_distance"}, optional
             Strategy for aggregating data from multiple sources
             (only applies when data_source="cells"):
+
             - "mean": Simple arithmetic mean
             - "area_weighted": Weighted by parent cell areas
             - "inverse_distance": Weighted by inverse distance from facet centroid
               to parent cell centroids
         target_counts : list[int] | {"boundary", "shared", "interior", "all"}, optional
             Which facets to keep based on how many parent cells share them:
+
             - "all": Keep all unique facets (default)
             - "boundary": Keep only boundary facets (appearing in exactly 1 cell)
             - "shared": Keep only shared facets (appearing in 2+ cells)
@@ -1828,6 +1975,7 @@ class Mesh:
         ----------
         adjacency_codimension : int, optional
             Codimension of shared facets defining adjacency.
+
             - 1 (default): Cells must share a codimension-1 facet (e.g., triangles
               sharing an edge, tetrahedra sharing a triangular face)
             - 2: Cells must share a codimension-2 facet (e.g., tetrahedra sharing
@@ -2060,6 +2208,7 @@ class Mesh:
         ----------
         backend : {"auto", "matplotlib", "pyvista"}
             Visualization backend to use:
+
             - "auto": Automatically select based on n_spatial_dims
               (matplotlib for 0D/1D/2D, PyVista for 3D)
             - "matplotlib": Force matplotlib backend (supports 3D via mplot3d)
@@ -2070,12 +2219,14 @@ class Mesh:
             customization before display.
         point_scalars : torch.Tensor or str or tuple[str, ...], optional
             Scalar data to color points. Mutually exclusive with cell_scalars. Can be:
+
             - None: Points use neutral color (black)
             - torch.Tensor: Direct scalar values, shape (n_points,) or
               (n_points, ...) where trailing dimensions are L2-normed
             - str or tuple[str, ...]: Key to lookup in mesh.point_data
         cell_scalars : torch.Tensor or str or tuple[str, ...], optional
             Scalar data to color cells. Mutually exclusive with point_scalars. Can be:
+
             - None: Cells use neutral color (lightblue if no scalars,
               lightgray if point_scalars active)
             - torch.Tensor: Direct scalar values, shape (n_cells,) or
@@ -2095,9 +2246,10 @@ class Mesh:
             Opacity for cell edges, range [0, 1].
         show_edges : bool
             Whether to draw cell edges.
-        ax : matplotlib.axes.Axes, optional
-            (matplotlib only) Existing matplotlib axes to plot on. If None,
-            creates new figure and axes.
+        ax : matplotlib.axes.Axes or pyvista.Plotter, optional
+            Existing canvas to draw on. For matplotlib, a matplotlib Axes;
+            for PyVista, a pyvista Plotter. If ``None``, a new figure/plotter
+            is created. Use this to overlay multiple meshes on the same scene.
         backend_options : dict[str, Any], optional
             Additional keyword arguments forwarded to the underlying
             visualization backend (e.g. PyVista's ``plotter.add_mesh()``).
@@ -2412,6 +2564,118 @@ class Mesh:
             gradient_type=gradient_type,
         )
 
+    def integrate(
+        self,
+        field: str | tuple[str, ...] | torch.Tensor,
+        data_source: Literal["cells", "points"] = "cells",
+    ) -> torch.Tensor:
+        r"""Integrate a field over the mesh domain.
+
+        Computes :math:`\int_\Omega f\,d\Omega` using the appropriate
+        quadrature rule for the field's discretization.  Cell data is
+        treated as piecewise-constant (P0); point data is treated as
+        piecewise-linear (P1) via the vertex-averaging rule (exact for
+        linear fields, second-order accurate for smooth fields).
+
+        The manifold dimension determines the measure automatically:
+        arc length for ``Mesh[1, ...]``, surface area for ``Mesh[2, ...]``,
+        volume for ``Mesh[3, ...]``, etc.
+
+        Parameters
+        ----------
+        field : str, tuple[str, ...], or torch.Tensor
+            Field to integrate:
+
+            - ``str`` or ``tuple``: looked up in ``cell_data`` or
+              ``point_data`` according to *data_source*.
+            - ``torch.Tensor``: used directly.
+        data_source : {"cells", "points"}
+            Whether *field* is cell-centered (P0) or vertex-centered (P1).
+
+        Returns
+        -------
+        torch.Tensor
+            Integral value.  Shape matches ``field.shape[1:]`` (trailing
+            dimensions are preserved: scalar -> 0-d, vector -> 1-d, etc.).
+
+        Raises
+        ------
+        KeyError
+            If *field* is a string key not present in the specified
+            data source.
+        ValueError
+            If the mesh has no cells, or if a raw tensor has the wrong
+            leading dimension for the specified *data_source*.
+
+        Examples
+        --------
+        >>> import torch
+        >>> from physicsnemo.mesh import Mesh
+        >>> pts = torch.tensor([[0., 0.], [1., 0.], [0.5, 1.]])
+        >>> cells = torch.tensor([[0, 1, 2]])
+        >>> mesh = Mesh(points=pts, cells=cells)
+        >>> mesh.cell_data["p"] = torch.tensor([3.0])
+        >>> mesh.integrate("p")
+        tensor(1.5000)
+        """
+        from physicsnemo.mesh.calculus.integration import integrate
+
+        return integrate(
+            mesh=self,
+            field=field,
+            data_source=data_source,
+        )
+
+    def integrate_flux(
+        self,
+        field: str | tuple[str, ...] | torch.Tensor,
+        data_source: Literal["cells", "points"] = "cells",
+    ) -> torch.Tensor:
+        r"""Compute the surface flux integral for codimension-1 meshes.
+
+        Computes :math:`\int_\Gamma \mathbf{F} \cdot \mathbf{n}\,d\Gamma`,
+        the oriented flux of a vector field through the mesh surface.  Only
+        defined for codimension-1 meshes where unique cell normals exist.
+
+        Parameters
+        ----------
+        field : str, tuple[str, ...], or torch.Tensor
+            Vector field with last dimension equal to ``n_spatial_dims``.
+        data_source : {"cells", "points"}
+            Whether *field* is cell-centered or vertex-centered.
+
+        Returns
+        -------
+        torch.Tensor
+            Scalar flux value (0-d tensor).
+
+        Raises
+        ------
+        KeyError
+            If *field* is a string key not present in the specified
+            data source.
+        ValueError
+            If the mesh is not codimension-1, or if the field's last
+            dimension does not match ``n_spatial_dims``.
+
+        Examples
+        --------
+        >>> import torch
+        >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+        >>> sphere = sphere_icosahedral.load(subdivisions=2)
+        >>> # Constant field through a closed surface -> zero flux
+        >>> v = torch.ones(sphere.n_cells, 3)
+        >>> sphere.integrate_flux(v).abs() < 1e-5
+        tensor(True)
+        """
+        from physicsnemo.mesh.calculus.integration import integrate_flux
+
+        return integrate_flux(
+            mesh=self,
+            field=field,
+            data_source=data_source,
+        )
+
     def validate(
         self,
         check_degenerate_cells: bool = True,
@@ -2533,12 +2797,14 @@ class Mesh:
         levels : int, optional
             Number of subdivision iterations to perform. Each level
             increases mesh resolution exponentially:
+
             - 0: No subdivision (returns original mesh)
             - 1: Each cell splits into 2^n children
             - 2: Each cell splits into 4^n children
             - k: Each cell splits into (2^k)^n children
         filter : {"linear", "butterfly", "loop"}, optional
             Subdivision scheme to use:
+
             - "linear": Simple midpoint subdivision (interpolating).
               New vertices at exact edge midpoints. Works for any dimension.
               Preserves original vertices.
@@ -2728,4 +2994,4 @@ def _mesh_repr(self) -> str:
     return format_mesh_repr(self)
 
 
-Mesh.__repr__ = _mesh_repr  # type: ignore
+Mesh.__repr__ = _mesh_repr  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
