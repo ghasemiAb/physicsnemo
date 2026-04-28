@@ -97,9 +97,67 @@ class CombinedOptimizer(Optimizer):
 
 class PerTimestepInterfaceLoss(torch.nn.Module):
     """
-    Per-timestep interface-only loss.
-    
-    Uses absolute_expansion for predictable behavior on normalized coords.
+
+    Interface-band MSE loss computed per rollout timestep.
+
+    Rationale
+    ---------
+    In VOF (volume-of-fluid) problems, the vast majority of nodes are
+    either fully filled (VOF ≈ 1) or fully empty (VOF ≈ 0). The small
+    fraction of nodes near the fluid interface (``vof_lo < VOF < vof_hi``)
+    is where all of the interesting dynamics happens — flow front
+    advancement, curvature changes, wetting behavior.
+
+    A naïve MSE loss over all nodes is dominated by the trivial bulk
+    regions, so the model learns to match the 0/1 plateaus and barely
+    trains on the interface. This class removes that imbalance by
+    restricting the loss to nodes inside the interface band at each
+    timestep.
+
+    How the band is determined
+    --------------------------
+    At each timestep:
+
+    1. Nodes with partially-filled ground-truth VOF (``vof_lo < gt < vof_hi``)
+       define the interface "core".
+    2. The core is expanded to a band by including all nodes whose
+       position along the thickness axis is within ``±expansion`` of the
+       core. The axis is auto-detected as the direction with the smallest
+       spread of core nodes (typical for thin flow fronts).
+    3. ``expansion`` is either ``absolute_expansion`` (preferred for
+       normalized coordinates) or ``band_fraction * domain_extent``.
+
+    Interaction with the rollout model
+    ----------------------------------
+    The model (``TransolverAutoregressiveRollout``) always runs on the
+    full mesh so that attention has global spatial context — interface
+    dynamics depend on far-away boundary conditions. This loss does not
+    change the forward pass; it simply zeros out the gradient
+    contribution of bulk nodes by excluding them from the loss average.
+
+    During training, the band mask is rebuilt from *ground-truth* VOF at
+    every timestep so that the loss follows the true advancing interface,
+    not the model's (initially bad) predictions. At inference time no
+    masking is applied.
+
+    Args:
+        vof_lo: Lower VOF threshold for interface-core detection.
+        vof_hi: Upper VOF threshold for interface-core detection.
+        band_fraction: Band expansion as a fraction of the domain extent
+                       along the detected axis. Used only when
+                       ``absolute_expansion`` is ``None``.
+        interface_axis: Axis along which to expand the core into a band
+                        (0, 1, 2, or -1 for auto-detect).
+        absolute_expansion: Explicit band expansion in coordinate units.
+                            Recommended for z-score-normalized coords
+                            where domain-fraction is not meaningful.
+
+    Returns:
+        Tuple of ``(loss, interface_pct)``:
+          - ``loss``: Scalar MSE averaged over valid (non-empty) timesteps.
+          - ``interface_pct``: Mean percentage of nodes in the band over
+            the valid timesteps. Used for logging.
+
     """
 
     def __init__(

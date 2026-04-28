@@ -40,7 +40,7 @@ import os
 import json
 import numpy as np
 import torch
-from typing import Callable, Optional, Any
+from typing import Callable, Optional
 
 from physicsnemo.utils.logging import PythonLogger
 
@@ -62,121 +62,29 @@ USE_VOF_NORMALIZATION = False
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# JSON Utilities
+# Stats Serialization
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def save_json(data: dict, filepath: str) -> None:
-    """Save dictionary to JSON file."""
-    with open(filepath, 'w') as f:
-        json.dump(data, f, indent=2)
-
-
-def load_json(filepath: str) -> dict:
-    """Load dictionary from JSON file."""
-    with open(filepath, 'r') as f:
-        return json.load(f)
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# Type Conversion Utilities
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def _to_python_native(value: Any) -> Any:
+def save_stats_json(stats: dict, filepath: str) -> None:
     """
-    Recursively convert tensor/numpy values to Python native types.
+    Save a stats dict (with torch tensor values) to JSON.
 
-    This ensures JSON serialization works without any numpy/torch dependencies.
-
-    Args:
-        value: Any value (tensor, numpy array, list, dict, scalar, etc.)
-
-    Returns:
-        Python native type (list, dict, float, int, etc.)
+    Tensors are converted to Python lists so the file has no
+    numpy/torch dependency and can be inspected by hand.
     """
-    if isinstance(value, torch.Tensor):
-        return value.detach().cpu().tolist()
-    elif isinstance(value, np.ndarray):
-        return value.tolist()
-    elif isinstance(value, (np.floating, np.float32, np.float64)):
-        return float(value)
-    elif isinstance(value, (np.integer, np.int32, np.int64)):
-        return int(value)
-    elif isinstance(value, dict):
-        return {k: _to_python_native(v) for k, v in value.items()}
-    elif isinstance(value, (list, tuple)):
-        return [_to_python_native(v) for v in value]
-    elif hasattr(value, 'item'):
-        return value.item()
-    else:
-        return value
+    serializable = {
+        k: v.detach().cpu().tolist() if isinstance(v, torch.Tensor) else v
+        for k, v in stats.items()
+    }
+    with open(filepath, "w") as f:
+        json.dump(serializable, f, indent=2)
 
 
-def _to_tensor(value: Any, dtype: torch.dtype = torch.float32) -> torch.Tensor:
-    """
-    Safely convert a value to a torch tensor.
-
-    Handles: torch.Tensor, numpy.ndarray, list, scalar values.
-
-    Args:
-        value: Input value to convert
-        dtype: Target dtype
-
-    Returns:
-        torch.Tensor
-    """
-    if isinstance(value, torch.Tensor):
-        return value.to(dtype=dtype)
-    elif isinstance(value, np.ndarray):
-        return torch.from_numpy(value.copy()).to(dtype=dtype)
-    elif isinstance(value, (list, tuple)):
-        return torch.tensor(value, dtype=dtype)
-    else:
-        return torch.tensor(value, dtype=dtype)
-
-
-def _to_numpy(value: Any) -> np.ndarray:
-    """
-    Safely convert a value to a numpy array.
-
-    Args:
-        value: Input value (tensor, array, list, etc.)
-
-    Returns:
-        numpy.ndarray
-    """
-    if isinstance(value, torch.Tensor):
-        return value.detach().cpu().numpy()
-    elif isinstance(value, np.ndarray):
-        return value
-    else:
-        return np.asarray(value)
-
-
-def _stats_to_serializable(stats: dict) -> dict:
-    """
-    Convert stats dict to JSON-serializable format (pure Python types).
-
-    Args:
-        stats: Dictionary with tensor/array values
-
-    Returns:
-        Dictionary with Python native types (lists, floats)
-    """
-    return _to_python_native(stats)
-
-
-def _stats_from_serializable(stats: dict, dtype: torch.dtype = torch.float32) -> dict:
-    """
-    Convert stats dict from JSON format back to tensors.
-
-    Args:
-        stats: Dictionary (with list values from JSON)
-        dtype: Target tensor dtype
-
-    Returns:
-        Dictionary with tensor values
-    """
-    return {k: _to_tensor(v, dtype=dtype) for k, v in stats.items()}
+def load_stats_json(filepath: str, dtype: torch.dtype = torch.float32) -> dict:
+    """Load a stats dict from JSON and convert lists back to tensors."""
+    with open(filepath, "r") as f:
+        raw = json.load(f)
+    return {k: torch.as_tensor(v, dtype=dtype) for k, v in raw.items()}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -404,17 +312,20 @@ class UnderfillDataset:
         """
         Process a single VTP record.
 
+        The reader contract returns numpy arrays, so we convert directly
+        to torch tensors without defensive wrappers.
+
         Args:
             idx: Record index
             rec: Dictionary with "coords" [N, 3] and "epoxy_vof" [T, N, 1]
         """
-        coords = _to_numpy(rec["coords"])  # [N, 3]
+        coords = np.asarray(rec["coords"])  # [N, 3]
         N_nodes = coords.shape[0]
 
         if "epoxy_vof" not in rec:
             raise ValueError(f"Record {idx} missing 'epoxy_vof' field")
 
-        epoxy_vof = _to_numpy(rec["epoxy_vof"])  # [T_file, N, 1]
+        epoxy_vof = np.asarray(rec["epoxy_vof"])  # [T_file, N, 1]
 
         T_file = epoxy_vof.shape[0]
         T = min(T_file, self.num_steps)
@@ -424,11 +335,11 @@ class UnderfillDataset:
 
         # Static coords replicated for all timesteps: [T, N, 3]
         coords_seq = np.tile(coords[np.newaxis, :, :], (T, 1, 1))
-        self.mesh_pos_seq.append(torch.from_numpy(coords_seq.copy()).float())
+        self.mesh_pos_seq.append(torch.from_numpy(coords_seq.copy()))
 
         # Slice epoxy_vof to desired time steps: [T, N, 1]
         epoxy_vof_sliced = epoxy_vof[:T].copy()
-        self.epoxy_vof_seq.append(torch.from_numpy(epoxy_vof_sliced).float())
+        self.epoxy_vof_seq.append(torch.from_numpy(epoxy_vof_sliced))
 
         if self.debug:
             print(f"      coords: {coords_seq.shape}")
@@ -469,18 +380,18 @@ class UnderfillDataset:
                 self._log("  VOF normalization: identity (no-op)")
 
             # Save for validation/inference
-            save_json(_stats_to_serializable(self.node_stats), node_stats_path)
-            save_json(_stats_to_serializable(self.feature_stats), feat_stats_path)
+            save_stats_json(self.node_stats, node_stats_path)
+            save_stats_json(self.feature_stats, feat_stats_path)
             self._log(f"  Saved statistics to {self._stats_dir}/")
 
         else:
             # Load from saved training stats
             if os.path.exists(node_stats_path) and os.path.exists(feat_stats_path):
                 self._log(f"\n  Loading statistics from {self._stats_dir}/")
-                self.node_stats = _stats_from_serializable(load_json(node_stats_path))
+                self.node_stats = load_stats_json(node_stats_path)
 
                 if USE_VOF_NORMALIZATION:
-                    self.feature_stats = _stats_from_serializable(load_json(feat_stats_path))
+                    self.feature_stats = load_stats_json(feat_stats_path)
                     self._log("  VOF normalization: z-score (loaded from file)")
                 else:
                     self.feature_stats = self._identity_feature_stats()
@@ -517,20 +428,10 @@ class UnderfillDataset:
         feat_std = self.feature_stats['feature_std']
 
         self._log(f"\n  Statistics (from {self._stats_dir}):")
-
-        if isinstance(pos_mean, torch.Tensor):
-            self._log(f"    pos_mean:     [{pos_mean[0].item():.6f}, {pos_mean[1].item():.6f}, {pos_mean[2].item():.6f}]")
-            self._log(f"    pos_std:      [{pos_std[0].item():.6f}, {pos_std[1].item():.6f}, {pos_std[2].item():.6f}]")
-        else:
-            self._log(f"    pos_mean:     {pos_mean}")
-            self._log(f"    pos_std:      {pos_std}")
-
-        if isinstance(feat_mean, torch.Tensor):
-            self._log(f"    feature_mean: {feat_mean.item():.6f}")
-            self._log(f"    feature_std:  {feat_std.item():.6f}")
-        else:
-            self._log(f"    feature_mean: {feat_mean}")
-            self._log(f"    feature_std:  {feat_std}")
+        self._log(f"    pos_mean:     [{pos_mean[0].item():.6f}, {pos_mean[1].item():.6f}, {pos_mean[2].item():.6f}]")
+        self._log(f"    pos_std:      [{pos_std[0].item():.6f}, {pos_std[1].item():.6f}, {pos_std[2].item():.6f}]")
+        self._log(f"    feature_mean: {feat_mean.item():.6f}")
+        self._log(f"    feature_std:  {feat_std.item():.6f}")
 
         if not USE_VOF_NORMALIZATION:
             self._log(f"    (VOF normalization is identity — model sees raw [0, 1] values)")
@@ -571,10 +472,10 @@ class UnderfillDataset:
         """
         self._log("\n  Applying normalization...")
 
-        pos_mean = _to_tensor(self.node_stats["pos_mean"])
-        pos_std = _to_tensor(self.node_stats["pos_std"])
-        feat_mean = _to_tensor(self.feature_stats["feature_mean"])
-        feat_std = _to_tensor(self.feature_stats["feature_std"])
+        pos_mean = self.node_stats["pos_mean"]
+        pos_std = self.node_stats["pos_std"]
+        feat_mean = self.feature_stats["feature_mean"]
+        feat_std = self.feature_stats["feature_std"]
 
         for i in range(len(self.mesh_pos_seq)):
             # Normalize positions: [T, N, 3]
@@ -668,8 +569,9 @@ class UnderfillDataset:
             N = pos_seq.shape[1]
             node_target = torch.zeros((N, 0), dtype=torch.float32)
 
-        return SimSample(node_features=node_features, node_target=node_target)
 
+
+        return SimSample(node_features=node_features, node_target=node_target)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Collate Function
@@ -684,4 +586,3 @@ def simsample_collate(batch: list[SimSample]) -> list[SimSample]:
     the list and process samples individually in the training loop.
     """
     return batch
-

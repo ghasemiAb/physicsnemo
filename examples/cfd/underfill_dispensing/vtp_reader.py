@@ -9,32 +9,116 @@ Reads VTP files containing:
 
 Naming conventions supported (auto-detected per field):
     - <field>_step00, <field>_step01, ...   (e.g. epoxy_vof_step00)
+    - <field>_t0.000, <field>_t0.005, ...   (float time labels)
     - <field>_00, <field>_01, ...           (e.g. epoxy_vof_00)
+
 Each VTP file represents one simulation case (e.g., G1, G2, ...) with
 multiple time steps.
+
+All arrays are returned as float32, matching what EMA3D/CFD solvers
+typically write. The downstream datapipe uses float32 throughout, so
+float64 would just double memory and be cast back immediately.
 """
 
 import os
-import re
 import numpy as np
 import pyvista as pv
-from typing import Optional
+from typing import Optional, Callable
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Time-series field discovery
+# Time-series key parsing
 # ═══════════════════════════════════════════════════════════════════════════════
+#
+# VTP point-data keys follow one of three naming conventions:
+#
+#   <field>_step<int>   e.g. "epoxy_vof_step00", "epoxy_vof_step15"
+#   <field>_t<float>    e.g. "epoxy_vof_t0.005", "epoxy_vof_t1.250"
+#   <field>_<int>       e.g. "epoxy_vof_00", "epoxy_vof_15"
+#
+# Each parser below attempts to split a key into (base_name, time_index)
+# and returns None if the key does not match. The parsers are tried in
+# order of specificity so that "step" / "t" prefixes are detected before
+# falling back to the bare-integer form.
 
-# Patterns ordered from most specific to most permissive.
-# Each pattern must expose a named group ``idx`` used for sorting.
-_TIME_SERIES_PATTERNS: list[re.Pattern] = [
-    # <field>_step00, <field>_step01, ...
-    re.compile(r"^(?P<field>.+?)_step(?P<idx>\d+)$"),
-    # <field>_t0.000, <field>_t0.005, ...  (float time label)
-    re.compile(r"^(?P<field>.+?)_t(?P<idx>\d+\.\d+)$"),
-    # <field>_00, <field>_01, ...  (bare numeric suffix)
-    re.compile(r"^(?P<field>.+?)_(?P<idx>\d+)$"),
+
+def _parse_step_suffix(key: str) -> Optional[tuple[str, float]]:
+    """
+    Parse keys like ``<field>_stepNN``.
+
+    Returns (field_name, index_as_float) or None if no match.
+    """
+    sep = "_step"
+    idx = key.rfind(sep)
+    if idx < 0:
+        return None
+
+    field = key[:idx]
+    tail = key[idx + len(sep):]
+    if not field or not tail.isdigit():
+        return None
+
+    return field, float(tail)
+
+
+def _parse_float_time_suffix(key: str) -> Optional[tuple[str, float]]:
+    """
+    Parse keys like ``<field>_tN.NNN``.
+
+    Returns (field_name, index_as_float) or None if no match.
+    """
+    sep = "_t"
+    idx = key.rfind(sep)
+    if idx < 0:
+        return None
+
+    field = key[:idx]
+    tail = key[idx + len(sep):]
+    if not field or "." not in tail:
+        return None
+
+    try:
+        value = float(tail)
+    except ValueError:
+        return None
+
+    return field, value
+
+
+def _parse_int_suffix(key: str) -> Optional[tuple[str, float]]:
+    """
+    Parse keys like ``<field>_NN`` (plain integer suffix).
+
+    Returns (field_name, index_as_float) or None if no match.
+    """
+    if "_" not in key:
+        return None
+
+    field, _, tail = key.rpartition("_")
+    if not field or not tail.isdigit():
+        return None
+
+    return field, float(tail)
+
+
+# Parsers ordered from most specific to most permissive.
+# The first parser that returns a non-None match wins.
+_KEY_PARSERS: list[Callable[[str], Optional[tuple[str, float]]]] = [
+    _parse_step_suffix,
+    _parse_float_time_suffix,
+    _parse_int_suffix,
 ]
+
+
+def _parse_time_series_key(key: str) -> Optional[tuple[str, float]]:
+    """
+    Try each parser in order. Returns (field_name, index) or None.
+    """
+    for parser in _KEY_PARSERS:
+        result = parser(key)
+        if result is not None:
+            return result
+    return None
 
 
 def _discover_time_series(
@@ -52,26 +136,21 @@ def _discover_time_series(
 
     Returns:
         ``{field_name: [(sort_key, original_key), ...]}`` sorted by time index.
-        ``sort_key`` is a float so that both integer step indices and
-        floating-point time labels are handled uniformly.
     """
-    # field_name -> list of (sort_key, original_key)
     groups: dict[str, list[tuple[float, str]]] = {}
 
     for key in keys:
-        for pattern in _TIME_SERIES_PATTERNS:
-            m = pattern.match(key)
-            if m is None:
-                continue
-            name = m.group("field")
-            idx = float(m.group("idx"))
+        parsed = _parse_time_series_key(key)
+        if parsed is None:
+            continue
 
-            # Filter early when a specific field is requested.
-            if field_name is not None and name != field_name:
-                break  # no point trying other patterns for this key
+        name, idx = parsed
 
-            groups.setdefault(name, []).append((idx, key))
-            break  # matched – skip remaining patterns for this key
+        # Filter by requested field name
+        if field_name is not None and name != field_name:
+            continue
+
+        groups.setdefault(name, []).append((idx, key))
 
     # Sort each series by time index
     for name in groups:
@@ -81,7 +160,7 @@ def _discover_time_series(
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# File-level helpers
+# File discovery
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
@@ -89,11 +168,8 @@ def find_vtp_files(base_data_dir: str) -> list[str]:
     """
     Find all VTP files in directory, sorted naturally.
 
-    Args:
-        base_data_dir: Directory to search
-
-    Returns:
-        List of absolute paths to VTP files, sorted
+    "Naturally" means that "case_2.vtp" comes before "case_10.vtp", which
+    is the intuitive ordering for numbered filenames.
     """
     if not os.path.isdir(base_data_dir):
         return []
@@ -104,14 +180,43 @@ def find_vtp_files(base_data_dir: str) -> list[str]:
         if f.lower().endswith(".vtp")
     ]
 
-    def natural_key(name):
-        """Sort key for natural ordering (handles numbers properly)."""
-        return [
-            int(s) if s.isdigit() else s.lower()
-            for s in re.findall(r"\d+|\D+", os.path.basename(name))
-        ]
+    return sorted(vtps, key=_natural_sort_key)
 
-    return sorted(vtps, key=natural_key)
+
+def _natural_sort_key(path: str) -> list:
+    """
+    Build a sort key that splits a filename into alternating
+    numeric and alphabetic chunks so that numbers sort numerically.
+
+    Example:
+        "case_10.vtp" -> ["case_", 10, ".vtp"]
+        "case_2.vtp"  -> ["case_", 2, ".vtp"]
+    """
+    name = os.path.basename(path)
+    parts = []
+    current = []
+    current_is_digit = name[0].isdigit() if name else False
+
+    for ch in name:
+        is_digit = ch.isdigit()
+        if is_digit == current_is_digit:
+            current.append(ch)
+        else:
+            chunk = "".join(current)
+            parts.append(int(chunk) if current_is_digit else chunk.lower())
+            current = [ch]
+            current_is_digit = is_digit
+
+    if current:
+        chunk = "".join(current)
+        parts.append(int(chunk) if current_is_digit else chunk.lower())
+
+    return parts
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Single-file loader
+# ═══════════════════════════════════════════════════════════════════════════════
 
 
 def load_vtp_file(
@@ -125,21 +230,21 @@ def load_vtp_file(
     Args:
         vtp_path: Path to VTP file.
         field_name: Base name of the time-series to extract (e.g.
-                    ``"epoxy_vof"``).  If ``None``, *every* detected
+                    ``"epoxy_vof"``). If ``None``, every detected
                     time-series field is returned.
         debug: Enable verbose output.
 
     Returns:
         Tuple of:
-            - coords: ``[N, 3]`` mesh coordinates
-            - fields: ``{name: [T, N, 1]}`` for each discovered series
+            - coords: ``[N, 3]`` mesh coordinates (float32)
+            - fields: ``{name: [T, N, 1]}`` for each discovered series (float32)
     """
     mesh = pv.read(vtp_path)
 
     if not hasattr(mesh, "points"):
         raise ValueError(f"Cannot extract points from {vtp_path}")
 
-    coords = np.array(mesh.points, dtype=np.float64)  # [N, 3]
+    coords = np.asarray(mesh.points, dtype=np.float32)  # [N, 3]
     N_nodes = coords.shape[0]
 
     if debug:
@@ -153,7 +258,7 @@ def load_vtp_file(
         )
         print(f"      Available keys: {list(mesh.point_data.keys())}")
 
-    # ── Discover time-series fields ───────────────────────────────────────
+    # Discover time-series fields from the point-data key names
     all_keys = list(mesh.point_data.keys())
     series = _discover_time_series(all_keys, field_name=field_name)
 
@@ -164,7 +269,7 @@ def load_vtp_file(
             f"Available keys: {all_keys}"
         )
 
-    # ── Stack each series into [T, N, 1] ─────────────────────────────────
+    # Stack each series into [T, N, 1]
     fields: dict[str, np.ndarray] = {}
 
     for name, entries in series.items():
@@ -178,7 +283,7 @@ def load_vtp_file(
 
         arrays: list[np.ndarray] = []
         for _idx, key in entries:
-            arr = np.asarray(mesh.point_data[key], dtype=np.float64)
+            arr = np.asarray(mesh.point_data[key], dtype=np.float32)
             if arr.ndim != 1:
                 arr = arr.flatten()
             if arr.shape[0] != N_nodes:
@@ -225,8 +330,8 @@ def process_vtp_data(
 
     Returns:
         List of dictionaries, each containing:
-            - ``"coords"``: ``[N, 3]`` coordinates
-            - One key per discovered field: ``[T, N, 1]``
+            - ``"coords"``: ``[N, 3]`` coordinates (float32)
+            - One key per discovered field: ``[T, N, 1]`` (float32)
     """
     vtp_files = find_vtp_files(data_dir)
 
@@ -261,7 +366,6 @@ def process_vtp_data(
             )
             record = {"coords": coords, **fields}
             data_records.append(record)
-
         except Exception as e:
             msg = f"Error processing {vtp_path}: {e}"
             if logger:
@@ -275,7 +379,7 @@ def process_vtp_data(
             rec = data_records[0]
             print("  First record:")
             for k, v in rec.items():
-                print(f"    {k}: {v.shape}")
+                print(f"    {k}: {v.shape}  dtype={v.dtype}")
         print(f"{'=' * 60}\n")
 
     return data_records
