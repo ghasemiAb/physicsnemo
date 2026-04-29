@@ -1,0 +1,117 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+_target_: datapipe.Dataset
+_convert_: all
+data_dir: ${training.raw_data_dir}
+num_samples: ${training.num_samples}
+num_steps: ${training.num_time_steps}
+dt: 5e-3
+log_transform: true
+sample_type: "one_time_step"   # ← each index = (sample, timestep)
+# ── Per-epoch random sampling for large meshes ──
+# Set to null (or omit) to use all points (current behavior)
+# Set to an integer to randomly subsample that many field points per epoch
+resolution: 50000              # 50K field points per iteration 
+geometry_resolution: 20000      # 20K STL surface points per iteration 
+# 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Global Parameters Configuration
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Global parameters are per-simulation scalar values that affect the entire
+# field (not per-point). Common examples for EM shielding problems:
+#   - wave_azimuth:     incident wave direction angle (φ) in degrees
+#   - wave_elevation:   incident wave direction angle (θ) in degrees
+#   - frequency_ghz:    carrier frequency in GHz
+#   - amplitude_vm:     peak field amplitude in V/m
+#   - polarization:     polarization angle or categorical flag
+#
+# These values are read from <case_dir>/global_params.json, e.g.:
+#   {
+#     "wave_azimuth":    30.0,
+#     "wave_elevation":  45.0,
+#     "frequency_ghz":   1.5
+#   }
+#
+# The datapipe encodes each parameter into a normalized tensor using the
+# strategy specified in global_params_normalization, then passes them to the
+# model as a [1, 1, G] global embedding tensor. The GlobalContextBuilder in
+# GeoTransolver projects these onto learned physical state slices that are
+# cross-attended by every transformer block — so wave direction, frequency,
+# etc. influence predictions throughout the entire network.
+#
+# ─── Normalization types ────────────────────────────────────────────────────
+#
+#   "angle_deg":   Encodes an angle in degrees as [sin(θ), cos(θ)]  (2 features)
+#                  Use this for any angular quantity (azimuth, elevation,
+#                  polarization angle). Avoids the 0°↔360° discontinuity that
+#                  would confuse the model with raw degree values.
+#
+#   "angle_rad":   Same as angle_deg but input is in radians. (2 features)
+#
+#   "scale":       Linear rescaling: value / divisor.  (1 feature)
+#                  Use this for quantities that span a bounded linear range
+#                  (e.g., frequency 0.5–10 GHz → divide by 10 to get ~[0.05, 1]).
+#                  Choose `divisor` to bring typical values close to 1.0.
+#
+#   "log_scale":   Logarithmic rescaling: log(value / divisor).  (1 feature)
+#                  Use this for quantities spanning orders of magnitude
+#                  (e.g., frequency 1 kHz – 10 GHz).
+#
+# ─── How to DISABLE global parameters ───────────────────────────────────────
+#
+# If your dataset does NOT have global parameters, or you want to train
+# without them, simply set `global_params_keys` to an empty list and
+# `global_params_normalization` to an empty dict:
+#
+#     global_params_keys: []
+#     global_params_normalization: {}
+#
+# In this case:
+#   - The datapipe will NOT require global_params.json to exist
+#   - SimSample.global_features will be None
+#   - The model's _build_global_embedding() returns None
+#   - GeoTransolver runs without global context (equivalent to previous behavior)
+#   - You must also set `global_dim: null` in the model config
+#
+# ─── Configured parameters ──────────────────────────────────────────────────
+
+global_params_keys:
+  - wave_azimuth          # incident wave azimuth angle in degrees
+  - wave_elevation        # incident wave elevation angle in degrees
+  - frequency_ghz         # carrier frequency in GHz
+
+global_params_normalization:
+  wave_azimuth:
+    type: "angle_deg"     # → [sin, cos]   (2 features)
+  wave_elevation:
+    type: "angle_deg"     # → [sin, cos]   (2 features)
+  frequency_ghz:
+    type: "scale"
+    divisor: 10.0         # → freq / 10    (1 feature)
+
+# ─── Total global_dim = 2 + 2 + 1 = 5 ───────────────────────────────────────
+# This value must match the `global_dim` set in the model config.
+# If you change the keys or normalization types above, you MUST update
+# `global_dim` in conf/model/geotransolver.yaml accordingly.
+#
+# A helper is provided: after the dataset loads, the sanity-check log prints
+#     "Total global_dim: X"
+# Copy that value into the model config.
+
+#
+debug: ${training.debug}
