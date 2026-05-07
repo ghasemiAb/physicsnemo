@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -14,12 +14,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+
 # ┌───────────────────────────────────────────┐
 # │                   Data                    │
 # └───────────────────────────────────────────┘  
 
-raw_data_dir:  "/workspace/data/train"
-raw_data_dir_validation:  "/workspace/data/val" 
+raw_data_dir:  ???
+raw_data_dir_validation:  ???
 max_workers_preprocessing: 64  # Maximum parallel workers
 debug: True # Debug mode (verbose output)
 
@@ -46,7 +47,7 @@ interface_mask:
   vof_hi: 0.99
   band_fraction: 0.05 # dilate by 10% of domain extent along interface-normal axis
   interface_axis: -1    # -1 = auto-detect per sample
-  absolute_expansion: 0
+  absolute_expansion: null  # null = use band_fraction; set a float to override
 
 ckpt_path: "./checkpoints"
 tensorboard_log_dir: ./tensorboard_logs

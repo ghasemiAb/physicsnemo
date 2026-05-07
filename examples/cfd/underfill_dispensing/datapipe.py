@@ -1,5 +1,19 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
 Data Pipeline for Transient Epoxy VOF Prediction (Static Mesh).
 
@@ -241,7 +255,7 @@ class UnderfillDataset:
         self.data_dir = data_dir or "."
         self.split = split
         self.num_samples = num_samples
-        self.num_steps = min(num_steps, 20)  # Max 20 steps (step00 to step19)
+        self.num_steps = num_steps  # Max 20 steps (step00 to step19)
         self.logger = logger or PythonLogger()
         self.dt = dt
         self.debug = debug

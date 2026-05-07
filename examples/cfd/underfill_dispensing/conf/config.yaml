@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -21,8 +21,8 @@ hydra:
     dir: ./outputs/
 
 experiment_name: "Unified-Training"
-experiment_desc: "unified training recipe for crash models"
-run_desc: "unified training recipe for crash models"
+experiment_desc: "unified training recipe for underfill dispensing model"
+run_desc: "unified training recipe for underfill dispensing model"
 
 defaults:
   - datapipe: point_cloud   # will be overridden by model configs

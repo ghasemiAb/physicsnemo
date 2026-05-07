@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -14,7 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-output_dir_pred: "./predicted_vtps"
-output_dir_exact: "./exact_vtps"
-raw_data_dir_test: "/workspace/data/val"
-#raw_data_dir_test: raw_data_dir_test:"/workspace/isv/ansys/data/converted_output_singleVTU-VTP/val"
+output_dir_pred: ???
+output_dir_exact: ???
+raw_data_dir_test: ???

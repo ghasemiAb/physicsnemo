@@ -23,7 +23,7 @@ The **interface band** (where $0.01 \lt \text{VOF} \lt 0.99$) is the physically 
 The model was trained on a limited dataset comprising just 20 samples for training and 2 for validation/testing, targeting the epoxy Volume of Fluid (VOF) simulation. Despite the remarkably small dataset size, the model demonstrates a strong ability to accurately capture the interface dynamics. As illustrated in the animation below, the predicted interface evolution closely tracks the expected behavior, highlighting the model's data efficiency and generalization capability.
 
 <p align="center">
-  <img src="./img/G20.gif" alt="Epoxy VOF Animation" width="60%" />
+  <img src="../../../img/G20.gif" alt="Epoxy VOF Animation" width="60%" />
   <br>
   <em>Predicted vs Ground Truth VOF interface evolution over 19 time steps</em>
 </p>
@@ -62,7 +62,33 @@ The table below summarizes the model's performance across 19 autoregressive time
 
 > The model maintains low MAE (≤ 0.025) and RMSE (≤ 0.08) throughout all 19 time steps, with the predicted fill percentage closely tracking the ground truth (maximum deviation of ~2.9% at t=3). Errors remain stable and do not diverge over time, demonstrating robust autoregressive rollout even with a training set of only 20 samples.
 
+## Dataset Diversity
 
+The 21 simulation cases span a broad geometric envelope rather than minor
+variants of a single configuration: solid fraction varies from 0.18 to 0.59,
+equivalent hole diameter from 0.038 to 0.126 mm, and the spatial layout
+ranges from uniform hole grids to asymmetric multi-void patterns. This
+coverage is what allows the surrogate to generalize from only 20 training
+samples.
+
+<p align="center">
+  <img src="../../../docs/img/underfill/geometry_variation.png"
+       alt="Geometry variation across the dataset" width="95%" />
+  <br>
+  <em>X–Z projection of every simulation case, annotated with Solid
+  Fraction (SF), Silhouette fraction (Sil, sanity check), mean hole
+  diameter (D), and detected hole count (N).</em>
+</p>
+
+| Metric | Mean | Range | CV |
+|---|---|---|---|
+| Solid Fraction | 0.38 | 0.18 – 0.59 | 0.34 |
+| Hole Diameter (mm) | 0.060 | 0.038 – 0.126 | 0.29 |
+| Hole Count | 3346 | 1009 – 6418 | — |
+
+The dataset achieves a **Composite Versatility Index of 0.38** — within the
+*high-diversity* band (0.25 – 0.50) — meaning each training case contributes
+substantively new geometric information rather than redundancy.
 
 ## Prerequisites
 
@@ -74,6 +100,7 @@ The table below summarizes the model's performance across 19 autoregressive time
 pip install -r requirements.txt
 ```
 ---
+
 ## Data Format
 
 ### Input: VTP Files
@@ -82,23 +109,67 @@ Each `.vtp` file represents **one simulation case** (one geometry configuration)
 
 | Field | Shape | Description |
 |---|---|---|
-| `Points` | $$[N, 3]$$ | Static mesh node coordinates |
-| `epoxy_vof_step00` | $$[N]$$ | VOF at timestep 0 |
-| `epoxy_vof_step01` | $$[N]$$ | VOF at timestep 1 |
+| `Points` | $[N, 3]$ | Static mesh node coordinates |
+| `epoxy_vof_step00` | $[N]$ | VOF at timestep 0 |
+| `epoxy_vof_step01` | $[N]$ | VOF at timestep 1 |
 | ⋮ | ⋮ | ⋮ |
-| `epoxy_vof_step19` | $$[N]$$ | VOF at timestep 19 |
+| `epoxy_vof_step19` | $[N]$ | VOF at timestep 19 |
 
-Up to 20 timesteps per case (step00 through stepN). VTP files should be organized in a flat directory:
+Up to 20 timesteps per case (step00 through stepN).
+
+### Directory Layout
+
+**Training and validation** use a flat directory of VTP files — the reader
+scans for all `.vtp` files directly under the configured path:
+
 ```bash
 data/
-├── train/
+├── train/            # flat: VTP files directly here
 │   ├── G1.vtp
 │   ├── G2.vtp
 │   └── ...
-└── val/
+└── val/              # flat: VTP files directly here
     ├── G24.vtp
     └── ...
+```
 
+**Inference (test)** expects each run in its own **subdirectory** — the
+inference script scans for directories under `raw_data_dir_test` and
+processes each one independently. Each subdirectory should contain the
+VTP file(s) for that run:
+
+```bash
+data/test/            # parent directory set in config
+├── G24/              # one subdirectory per run
+│   └── G24.vtp
+├── G25/
+│   └── G25.vtp
+└── ...
+```
+> **Why the difference?** Training loads all VTP files in bulk via the
+> reader. Inference processes runs one at a time (with per-run output
+> directories, statistics, and mesh-template lookup), so it needs the
+> run-level directory structure for organization and provenance.
+
+To convert a flat test directory to the expected layout:
+```bash
+# Quick conversion: wrap each VTP in its own subdirectory
+cd data/test
+for f in *.vtp; do
+    name="${f%.vtp}"
+    mkdir -p "$name"
+    mv "$f" "$name/"
+done
+```
+
+After conversion:
+```bash
+data/test/
+├── G24/
+│   └── G24.vtp
+├── G25/
+│   └── G25.vtp
+└── ...
 ```
 
 ### Processed Sample (SimSample)
@@ -135,6 +206,16 @@ This is a point cloud representation (no graph edges). The Transolver uses atten
 │   Output: [T-1, N, 1]  predicted VOF at all future steps       │
 └────────────────────────────────────────────────────────────────┘
 ```
+### Why Sigmoid Activation?
+
+VOF is a volume fraction that must lie in $[0, 1]$ by definition. The sigmoid function $\sigma(x) = 1/(1+e^{-x})$ maps any real-valued model output to this range, providing two guarantees:
+
+1. **Physical validity** — The model cannot produce negative fill or fill > 100%, regardless of what the transformer outputs.
+
+2. **Stable autoregressive rollout** — Each step's output becomes the next step's input. Without bounding, small errors compound and diverge across steps. Sigmoid keeps every intermediate state in $[0, 1]$.
+
+We prefer sigmoid over post-hoc clamping because clamping has zero gradient at the boundaries — the model cannot learn to correct saturated predictions. Sigmoid always provides learning signal.
+
 
 ## Input Feature Composition
 
@@ -340,6 +421,17 @@ band = compute_interface_band(
 )
 # Returns: [N] boolean mask
 ```
+| Parameter | Default | Description |
+|---|---|---|
+| `vof_lo` | 0.01 | Lower VOF threshold for interface-core detection |
+| `vof_hi` | 0.99 | Upper VOF threshold for interface-core detection |
+| `band_fraction` | 0.05 | Expand the band by this fraction of the domain extent along the detected axis. Only used when `absolute_expansion` is `null`. |
+| `interface_axis` | -1 | Axis for band expansion (-1 = auto-detect as the axis with smallest interface spread) |
+| `absolute_expansion` | null | If set to a float, overrides `band_fraction` with an explicit expansion in coordinate units. Set to `null` to use `band_fraction` instead. |
+
+
+
+
 
 ### Algorithm:
 1. **Find core interface nodes** where $\mathrm{vof\_lo} < \mathrm{VOF} < \mathrm{vof\_hi}$.
