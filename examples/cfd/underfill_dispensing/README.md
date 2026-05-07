@@ -23,7 +23,7 @@ The **interface band** (where $0.01 \lt \text{VOF} \lt 0.99$) is the physically 
 The model was trained on a limited dataset comprising just 20 samples for training and 2 for validation/testing, targeting the epoxy Volume of Fluid (VOF) simulation. Despite the remarkably small dataset size, the model demonstrates a strong ability to accurately capture the interface dynamics. As illustrated in the animation below, the predicted interface evolution closely tracks the expected behavior, highlighting the model's data efficiency and generalization capability.
 
 <p align="center">
-  <img src="../../../img/underfill/G20.gif" alt="Epoxy VOF Animation" width="60%" />
+  <img src="../../../docs/img/underfill/G20.gif" alt="Epoxy VOF Animation" width="60%" />
   <br>
   <em>Predicted vs Ground Truth VOF interface evolution over 19 time steps</em>
 </p>
