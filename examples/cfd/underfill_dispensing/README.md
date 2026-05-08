@@ -66,8 +66,8 @@ The table below summarizes the model's performance across 19 autoregressive time
 ## Dataset Diversity
 
 The 21 simulation cases span a broad geometric envelope rather than minor
-variants of a single configuration: solid fraction varies from 0.18 to 0.59,
-equivalent hole diameter from 0.038 to 0.126 mm, and the spatial layout
+variants of a single configuration: solid fraction varies from 0.22 to 0.71,
+equivalent hole diameter from 0.051 to 0.140 mm, and the spatial layout
 ranges from uniform hole grids to asymmetric multi-void patterns. This
 coverage is what allows the surrogate to generalize from only 20 training
 samples.
@@ -83,10 +83,11 @@ samples.
 
 | Metric | Mean | Range | CV |
 |---|---|---|---|
-| Solid Fraction | 0.38 | 0.18 – 0.59 | 0.34 |
-| Hole Diameter (mm) | 0.060 | 0.038 – 0.126 | 0.29 |
+| Solid Fraction | 0.48 | 0.22 – 0.71 | 0.27 |
+| Hole Diameter (mm) | 0.113 | 0.051 – 0.140 | 0.23 |
+| Hole Count | 729 | 103 – 1378 | — |
 
-The dataset achieves a **Composite Versatility Index of 0.38** — within the
+The dataset achieves a **Composite Versatility Index of 0.31** — within the
 *high-diversity* band (0.25 – 0.50) — meaning each training case contributes
 substantively new geometric information rather than redundancy.
 
