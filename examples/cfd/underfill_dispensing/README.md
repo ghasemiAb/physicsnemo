@@ -85,7 +85,6 @@ samples.
 |---|---|---|---|
 | Solid Fraction | 0.38 | 0.18 – 0.59 | 0.34 |
 | Hole Diameter (mm) | 0.060 | 0.038 – 0.126 | 0.29 |
-| Hole Count | 3346 | 1009 – 6418 | — |
 
 The dataset achieves a **Composite Versatility Index of 0.38** — within the
 *high-diversity* band (0.25 – 0.50) — meaning each training case contributes
