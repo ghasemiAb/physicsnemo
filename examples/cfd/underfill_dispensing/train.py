@@ -85,10 +85,12 @@ class CombinedOptimizer(Optimizer):
             ]
 
     def zero_grad(self, *args, **kwargs) -> None:
+        """Zero gradients on every wrapped optimizer."""
         for opt in self.optimizers:
             opt.zero_grad(*args, **kwargs)
 
     def step(self, closure=None) -> None:
+        """Run a single optimization step on every wrapped optimizer."""
         for step_fn in self.step_fns:
             if closure is None:
                 step_fn()
@@ -96,9 +98,11 @@ class CombinedOptimizer(Optimizer):
                 step_fn(closure)
 
     def state_dict(self):
+        """Return a state dict aggregating the state of all wrapped optimizers."""
         return {"optimizers": [opt.state_dict() for opt in self.optimizers]}
 
     def load_state_dict(self, state_dict):
+        """Load aggregated state into each wrapped optimizer and refresh param groups."""
         for opt, sd in zip(self.optimizers, state_dict["optimizers"]):
             opt.load_state_dict(sd)
         self.param_groups = [g for opt in self.optimizers for g in opt.param_groups]
@@ -543,6 +547,7 @@ class Trainer:
 
 @hydra.main(version_base="1.3", config_path="conf", config_name="config")
 def main(cfg: DictConfig) -> None:
+    """Hydra entry point: initialize distributed state and launch the trainer."""
     DistributedManager.initialize()
     dist = DistributedManager()
 
