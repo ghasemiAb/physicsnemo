@@ -69,7 +69,7 @@ def _parse_step_suffix(key: str) -> Optional[tuple[str, float]]:
         return None
 
     field = key[:idx]
-    tail = key[idx + len(sep):]
+    tail = key[idx + len(sep) :]
     if not field or not tail.isdigit():
         return None
 
@@ -88,7 +88,7 @@ def _parse_float_time_suffix(key: str) -> Optional[tuple[str, float]]:
         return None
 
     field = key[:idx]
-    tail = key[idx + len(sep):]
+    tail = key[idx + len(sep) :]
     if not field or "." not in tail:
         return None
 
@@ -376,9 +376,7 @@ def process_vtp_data(
             logger.info(f"Processing: {os.path.basename(vtp_path)}")
 
         try:
-            coords, fields = load_vtp_file(
-                vtp_path, field_name=field_name, debug=debug
-            )
+            coords, fields = load_vtp_file(vtp_path, field_name=field_name, debug=debug)
             record = {"coords": coords, **fields}
             data_records.append(record)
         except Exception as e:

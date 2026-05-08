@@ -79,6 +79,7 @@ USE_VOF_NORMALIZATION = False
 # Stats Serialization
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 def save_stats_json(stats: dict, filepath: str) -> None:
     """
     Save a stats dict (with torch tensor values) to JSON.
@@ -104,6 +105,7 @@ def load_stats_json(filepath: str, dtype: torch.dtype = torch.float32) -> dict:
 # ═══════════════════════════════════════════════════════════════════════════════
 # Stats Directory Resolution
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 def _resolve_stats_dir(stats_dir: Optional[str] = None) -> str:
     """
@@ -134,6 +136,7 @@ def _resolve_stats_dir(stats_dir: Optional[str] = None) -> str:
     # Derive from Hydra's output directory when available
     try:
         from hydra.core.hydra_config import HydraConfig
+
         hydra_output = HydraConfig.get().runtime.output_dir
         return os.path.abspath(os.path.join(hydra_output, STATS_DIRNAME))
     except Exception:
@@ -144,6 +147,7 @@ def _resolve_stats_dir(stats_dir: Optional[str] = None) -> str:
 # ═══════════════════════════════════════════════════════════════════════════════
 # SimSample Class
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 class SimSample:
     """
@@ -170,9 +174,7 @@ class SimSample:
 
     def to(self, device: torch.device) -> "SimSample":
         """Move all tensors to specified device."""
-        self.node_features = {
-            k: v.to(device) for k, v in self.node_features.items()
-        }
+        self.node_features = {k: v.to(device) for k, v in self.node_features.items()}
         self.node_target = self.node_target.to(device)
         return self
 
@@ -185,7 +187,9 @@ class SimSample:
         return {
             "num_nodes": self.node_features["coords"].shape[0],
             "coords_shape": tuple(self.node_features["coords"].shape),
-            "features_shape": tuple(self.node_features.get("features", torch.tensor([])).shape),
+            "features_shape": tuple(
+                self.node_features.get("features", torch.tensor([])).shape
+            ),
             "target_shape": tuple(self.node_target.shape),
         }
 
@@ -199,6 +203,7 @@ class SimSample:
 # ═══════════════════════════════════════════════════════════════════════════════
 # UnderfillDataset Class
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 class UnderfillDataset:
     """
@@ -232,7 +237,7 @@ class UnderfillDataset:
         dt: float = 5e-3,
         debug: bool = False,
         stats_dir: Optional[str] = None,
-        **kwargs
+        **kwargs,
     ):
         """
         Initialize dataset.
@@ -260,9 +265,9 @@ class UnderfillDataset:
         self.dt = dt
         self.debug = debug
 
-        self._log(f"\n{'='*70}")
+        self._log(f"\n{'=' * 70}")
         self._log(f"Initializing {self.__class__.__name__}")
-        self._log(f"{'='*70}")
+        self._log(f"{'=' * 70}")
         self._log(f"  Name:        {name}")
         self._log(f"  Split:       {split}")
         self._log(f"  Data dir:    {self.data_dir}")
@@ -270,7 +275,9 @@ class UnderfillDataset:
         self._log(f"  Num steps:   {self.num_steps} (T)")
         self._log(f"  Rollout:     {self.num_steps - 1} steps (T-1)")
         self._log(f"  Feature:     epoxy_vof (scalar)")
-        self._log(f"  VOF norm:    {'z-score' if USE_VOF_NORMALIZATION else 'identity (no-op)'}")
+        self._log(
+            f"  VOF norm:    {'z-score' if USE_VOF_NORMALIZATION else 'identity (no-op)'}"
+        )
 
         # Resolve stats directory to a stable absolute path.
         # Default: <hydra.run.dir>/stats/ → ./outputs/stats/
@@ -294,8 +301,8 @@ class UnderfillDataset:
             raise ValueError(f"No data loaded from {self.data_dir}")
 
         # Storage for processed data
-        self.mesh_pos_seq: list[torch.Tensor] = []    # List of [T, N, 3]
-        self.epoxy_vof_seq: list[torch.Tensor] = []   # List of [T, N, 1]
+        self.mesh_pos_seq: list[torch.Tensor] = []  # List of [T, N, 3]
+        self.epoxy_vof_seq: list[torch.Tensor] = []  # List of [T, N, 1]
 
         self._log(f"\n  Processing {len(point_data)} records...")
 
@@ -357,8 +364,10 @@ class UnderfillDataset:
 
         if self.debug:
             print(f"      coords: {coords_seq.shape}")
-            print(f"      epoxy_vof: {epoxy_vof_sliced.shape}, "
-                  f"range [{epoxy_vof_sliced.min():.4f}, {epoxy_vof_sliced.max():.4f}]")
+            print(
+                f"      epoxy_vof: {epoxy_vof_sliced.shape}, "
+                f"range [{epoxy_vof_sliced.min():.4f}, {epoxy_vof_sliced.max():.4f}]"
+            )
 
     def _setup_statistics(self):
         """Compute or load normalization statistics.
@@ -411,7 +420,9 @@ class UnderfillDataset:
                     self.feature_stats = self._identity_feature_stats()
                     self._log("  VOF normalization: identity (no-op)")
             else:
-                self._log(f"\n  WARNING: No saved statistics found at {self._stats_dir}/")
+                self._log(
+                    f"\n  WARNING: No saved statistics found at {self._stats_dir}/"
+                )
                 self._log("           Expected files:")
                 self._log(f"             {node_stats_path}")
                 self._log(f"             {feat_stats_path}")
@@ -436,19 +447,25 @@ class UnderfillDataset:
 
     def _log_statistics(self):
         """Log the computed/loaded statistics."""
-        pos_mean = self.node_stats['pos_mean']
-        pos_std = self.node_stats['pos_std']
-        feat_mean = self.feature_stats['feature_mean']
-        feat_std = self.feature_stats['feature_std']
+        pos_mean = self.node_stats["pos_mean"]
+        pos_std = self.node_stats["pos_std"]
+        feat_mean = self.feature_stats["feature_mean"]
+        feat_std = self.feature_stats["feature_std"]
 
         self._log(f"\n  Statistics (from {self._stats_dir}):")
-        self._log(f"    pos_mean:     [{pos_mean[0].item():.6f}, {pos_mean[1].item():.6f}, {pos_mean[2].item():.6f}]")
-        self._log(f"    pos_std:      [{pos_std[0].item():.6f}, {pos_std[1].item():.6f}, {pos_std[2].item():.6f}]")
+        self._log(
+            f"    pos_mean:     [{pos_mean[0].item():.6f}, {pos_mean[1].item():.6f}, {pos_mean[2].item():.6f}]"
+        )
+        self._log(
+            f"    pos_std:      [{pos_std[0].item():.6f}, {pos_std[1].item():.6f}, {pos_std[2].item():.6f}]"
+        )
         self._log(f"    feature_mean: {feat_mean.item():.6f}")
         self._log(f"    feature_std:  {feat_std.item():.6f}")
 
         if not USE_VOF_NORMALIZATION:
-            self._log(f"    (VOF normalization is identity — model sees raw [0, 1] values)")
+            self._log(
+                f"    (VOF normalization is identity — model sees raw [0, 1] values)"
+            )
 
     def _compute_node_stats(self) -> dict:
         """Compute position statistics over all samples and time steps."""
@@ -494,37 +511,41 @@ class UnderfillDataset:
         for i in range(len(self.mesh_pos_seq)):
             # Normalize positions: [T, N, 3]
             self.mesh_pos_seq[i] = (
-                (self.mesh_pos_seq[i] - pos_mean.view(1, 1, -1))
-                / pos_std.view(1, 1, -1)
-            )
+                self.mesh_pos_seq[i] - pos_mean.view(1, 1, -1)
+            ) / pos_std.view(1, 1, -1)
 
             # Normalize epoxy_vof: [T, N, 1]
             # When USE_VOF_NORMALIZATION is False, this is (x - 0) / 1 = x
             self.epoxy_vof_seq[i] = (
-                (self.epoxy_vof_seq[i] - feat_mean.view(1, 1, -1))
-                / feat_std.view(1, 1, -1)
-            )
+                self.epoxy_vof_seq[i] - feat_mean.view(1, 1, -1)
+            ) / feat_std.view(1, 1, -1)
 
     def _print_summary(self):
         """Print dataset summary and verify tensor shapes."""
-        self._log(f"\n{'='*70}")
+        self._log(f"\n{'=' * 70}")
         self._log(f"Dataset Summary: {self.name} ({self.split})")
-        self._log(f"{'='*70}")
+        self._log(f"{'=' * 70}")
         self._log(f"  Total samples:     {self.length}")
         self._log(f"  Time steps (T):    {self.num_steps}")
         self._log(f"  Target steps:      {self.num_steps - 1} (T-1)")
         self._log(f"  Feature:           epoxy_vof")
         self._log(f"  Feature dimension: {self.NUM_FEATURES}")
-        self._log(f"  VOF normalization: {'z-score' if USE_VOF_NORMALIZATION else 'identity (no-op)'}")
+        self._log(
+            f"  VOF normalization: {'z-score' if USE_VOF_NORMALIZATION else 'identity (no-op)'}"
+        )
         self._log(f"  Stats directory:   {self._stats_dir}")
 
         if self.length > 0:
             sample = self[0]
-            N = sample.node_features['coords'].shape[0]
+            N = sample.node_features["coords"].shape[0]
 
             self._log(f"\n  Sample 0 shapes:")
-            self._log(f"    coords:   {sample.node_features['coords'].shape}  (expected: [N, 3])")
-            self._log(f"    features: {sample.node_features['features'].shape}  (expected: [N, 1])")
+            self._log(
+                f"    coords:   {sample.node_features['coords'].shape}  (expected: [N, 3])"
+            )
+            self._log(
+                f"    features: {sample.node_features['features'].shape}  (expected: [N, 1])"
+            )
             self._log(f"    target:   {sample.node_target.shape}  (expected: [N, T-1])")
 
             # Verify dimensions match expectations
@@ -539,7 +560,7 @@ class UnderfillDataset:
                 self._log(f"    Expected: {expected_target}")
                 self._log(f"    Actual:   {actual_target}")
 
-        self._log(f"{'='*70}\n")
+        self._log(f"{'=' * 70}\n")
 
     def __len__(self) -> int:
         return self.length
@@ -562,13 +583,13 @@ class UnderfillDataset:
             vof_seq:  [T, N, 1] -> features: [N, 1] (take t=0)
                                 -> target:   [N, T-1] (take t=1 to T-1)
         """
-        pos_seq = self.mesh_pos_seq[idx]    # [T, N, 3]
-        vof_seq = self.epoxy_vof_seq[idx]   # [T, N, 1]
+        pos_seq = self.mesh_pos_seq[idx]  # [T, N, 3]
+        vof_seq = self.epoxy_vof_seq[idx]  # [T, N, 1]
 
         # Input: initial state (t=0)
         node_features = {
-            "coords": pos_seq[0],           # [N, 3]
-            "features": vof_seq[0]          # [N, 1]
+            "coords": pos_seq[0],  # [N, 3]
+            "features": vof_seq[0],  # [N, 1]
         }
 
         # Target: future states (t=1, t=2, ..., t=T-1)
@@ -583,13 +604,13 @@ class UnderfillDataset:
             N = pos_seq.shape[1]
             node_target = torch.zeros((N, 0), dtype=torch.float32)
 
-
-
         return SimSample(node_features=node_features, node_target=node_target)
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Collate Function
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 def simsample_collate(batch: list[SimSample]) -> list[SimSample]:
     """

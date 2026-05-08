@@ -79,6 +79,7 @@ def _stats_to_device(
 @dataclass
 class TimestepStats:
     """Statistics for a single timestep."""
+
     mean: float
     std: float
     min_val: float
@@ -86,9 +87,7 @@ class TimestepStats:
     filled_pct: float  # % of points with VOF > threshold
 
     @classmethod
-    def from_array(
-        cls, arr: np.ndarray, threshold: float = 0.5
-    ) -> "TimestepStats":
+    def from_array(cls, arr: np.ndarray, threshold: float = 0.5) -> "TimestepStats":
         arr = arr.flatten()
         return cls(
             mean=float(arr.mean()),
@@ -136,9 +135,16 @@ def log_per_step_stats(
     if has_gt:
         headers = [
             "t",
-            "pred mean", "pred std", "pred range", "pred fill%",
-            "gt mean",   "gt std",   "gt range",   "gt fill%",
-            "mae",       "rmse",
+            "pred mean",
+            "pred std",
+            "pred range",
+            "pred fill%",
+            "gt mean",
+            "gt std",
+            "gt range",
+            "gt fill%",
+            "mae",
+            "rmse",
         ]
         rows = [
             [
@@ -148,19 +154,23 @@ def log_per_step_stats(
                 f"[{r['pred_min']:.2f},{r['pred_max']:.2f}]",
                 f"{r['pred_filled']:.1f}",
                 f"{r['gt_mean']:.4f}" if r.get("gt_mean") is not None else "-",
-                f"{r['gt_std']:.4f}"  if r.get("gt_std")  is not None else "-",
+                f"{r['gt_std']:.4f}" if r.get("gt_std") is not None else "-",
                 f"[{r['gt_min']:.2f},{r['gt_max']:.2f}]"
-                    if r.get("gt_min") is not None else "-",
-                f"{r['gt_filled']:.1f}"
-                    if r.get("gt_filled") is not None else "-",
-                f"{r['mae']:.5f}"  if r.get("mae")  is not None else "-",
+                if r.get("gt_min") is not None
+                else "-",
+                f"{r['gt_filled']:.1f}" if r.get("gt_filled") is not None else "-",
+                f"{r['mae']:.5f}" if r.get("mae") is not None else "-",
                 f"{r['rmse']:.5f}" if r.get("rmse") is not None else "-",
             ]
             for r in per_step_rows
         ]
     else:
         headers = [
-            "t", "pred mean", "pred std", "pred range", "pred fill%",
+            "t",
+            "pred mean",
+            "pred std",
+            "pred range",
+            "pred fill%",
         ]
         rows = [
             [
@@ -271,7 +281,7 @@ def save_vtp_predictions(
                 gt_stats = TimestepStats.from_array(gt_np)
                 error = pred_np - gt_np
                 mae = float(np.abs(error).mean())
-                rmse = float(np.sqrt((error ** 2).mean()))
+                rmse = float(np.sqrt((error**2).mean()))
                 all_mae.append(mae)
                 all_rmse.append(rmse)
                 gt_available_count += 1
@@ -299,7 +309,7 @@ def save_vtp_predictions(
                         gt_stats = TimestepStats.from_array(gt_np)
                         error = pred_np - gt_np
                         mae = float(np.abs(error).mean())
-                        rmse = float(np.sqrt((error ** 2).mean()))
+                        rmse = float(np.sqrt((error**2).mean()))
                         all_mae.append(mae)
                         all_rmse.append(rmse)
                         gt_available_count += 1
@@ -316,15 +326,17 @@ def save_vtp_predictions(
             "pred_filled": pred_stats.filled_pct,
         }
         if gt_stats is not None:
-            row.update({
-                "gt_mean": gt_stats.mean,
-                "gt_std": gt_stats.std,
-                "gt_min": gt_stats.min_val,
-                "gt_max": gt_stats.max_val,
-                "gt_filled": gt_stats.filled_pct,
-                "mae": mae,
-                "rmse": rmse,
-            })
+            row.update(
+                {
+                    "gt_mean": gt_stats.mean,
+                    "gt_std": gt_stats.std,
+                    "gt_min": gt_stats.min_val,
+                    "gt_max": gt_stats.max_val,
+                    "gt_filled": gt_stats.filled_pct,
+                    "mae": mae,
+                    "rmse": rmse,
+                }
+            )
         per_step_rows.append(row)
 
         # Build mesh and save prediction
@@ -353,7 +365,7 @@ def save_vtp_predictions(
     if gt_available_count > 0:
         stats["total_mae"] = float(np.mean(all_mae))
         stats["total_rmse"] = float(np.mean(all_rmse))
-        stats["total_mse"] = float(np.mean([r ** 2 for r in all_rmse]))
+        stats["total_mse"] = float(np.mean([r**2 for r in all_rmse]))
 
     return stats
 
@@ -467,11 +479,9 @@ class InferenceWorker:
                         "position mean": [
                             f"{pos_mean[i].item():.6f}" for i in range(3)
                         ],
-                        "position std": [
-                            f"{pos_std[i].item():.6f}" for i in range(3)
-                        ],
+                        "position std": [f"{pos_std[i].item():.6f}" for i in range(3)],
                         "vof mean": f"{vof_mean.item():.6f}",
-                        "vof std":  f"{vof_std.item():.6f}",
+                        "vof std": f"{vof_std.item():.6f}",
                     },
                 )
 
@@ -490,9 +500,9 @@ class InferenceWorker:
                         self.logger,
                         "Input (t=0)",
                         {
-                            "vof mean":   f"{input_vof_denorm.mean():.6f}",
-                            "vof std":    f"{input_vof_denorm.std():.6f}",
-                            "vof range":  f"[{input_vof_denorm.min():.4f}, {input_vof_denorm.max():.4f}]",
+                            "vof mean": f"{input_vof_denorm.mean():.6f}",
+                            "vof std": f"{input_vof_denorm.std():.6f}",
+                            "vof range": f"[{input_vof_denorm.min():.4f}, {input_vof_denorm.max():.4f}]",
                             "filled (%)": f"{(input_vof_denorm > 0.5).sum() / len(input_vof_denorm) * 100:.1f}",
                         },
                     )
@@ -509,9 +519,7 @@ class InferenceWorker:
                 ]
 
                 # ── Denormalize ground truth for comparison ─────────────
-                gt_seq_denorm = (
-                    sample.node_target.transpose(0, 1).unsqueeze(-1)
-                )
+                gt_seq_denorm = sample.node_target.transpose(0, 1).unsqueeze(-1)
                 gt_seq_denorm = [
                     denormalize_vof(gt_seq_denorm[t], vof_mean, vof_std)
                     for t in range(gt_seq_denorm.size(0))
@@ -548,11 +556,13 @@ class InferenceWorker:
                             "timesteps predicted": stats["num_timesteps"],
                         }
                         if stats["has_ground_truth"]:
-                            overall.update({
-                                "mae":  f"{stats['total_mae']:.6f}",
-                                "rmse": f"{stats['total_rmse']:.6f}",
-                                "mse":  f"{stats['total_mse']:.6f}",
-                            })
+                            overall.update(
+                                {
+                                    "mae": f"{stats['total_mae']:.6f}",
+                                    "rmse": f"{stats['total_rmse']:.6f}",
+                                    "mse": f"{stats['total_mse']:.6f}",
+                                }
+                            )
                         else:
                             overall["ground truth"] = "not available"
                         log_config(self.logger, "Overall statistics", overall)
@@ -561,20 +571,16 @@ class InferenceWorker:
                             self.logger,
                             "Run summary",
                             {
-                                "run name":    run_name,
-                                "num points":  f"{N:,}",
-                                "timesteps":   T_pred,
-                                "output dir":  out_dir,
+                                "run name": run_name,
+                                "num points": f"{N:,}",
+                                "timesteps": T_pred,
+                                "output dir": out_dir,
                             },
                         )
 
-                    self.logger.info(
-                        f"[Rank {self.dist.rank}] Saved to {out_dir}"
-                    )
+                    self.logger.info(f"[Rank {self.dist.rank}] Saved to {out_dir}")
 
-            self.logger.info(
-                f"[Rank {self.dist.rank}] Finished run: {run_name}"
-            )
+            self.logger.info(f"[Rank {self.dist.rank}] Finished run: {run_name}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -634,7 +640,7 @@ def main(cfg: DictConfig):
             "Summary",
             {
                 "processed runs": len(my_runs),
-                "output dir":     worker.output_dir,
+                "output dir": worker.output_dir,
             },
         )
 

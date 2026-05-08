@@ -15,7 +15,6 @@
 # limitations under the License.
 
 
-
 """
 Autoregressive Rollout for Transolver VOF Prediction.
 
@@ -205,13 +204,13 @@ class TransolverAutoregressiveRollout(GeoTransolver):
         """
         del data_stats  # unused; included for compatibility
 
-        coords = sample.node_features["coords"]      # [N, 3]
-        vof_t = sample.node_features["features"]     # [N, 1]
+        coords = sample.node_features["coords"]  # [N, 3]
+        vof_t = sample.node_features["features"]  # [N, 1]
 
         outputs: list[torch.Tensor] = []
 
         for _ in range(self.rollout_steps):
-            fourier = self._fourier_features(coords)        # [N, F_fourier]
+            fourier = self._fourier_features(coords)  # [N, F_fourier]
             fx_t = torch.cat([vof_t, coords, fourier], dim=-1)  # [N, functional_dim]
 
             if self.training:
@@ -283,16 +282,17 @@ class TransolverAutoregressiveRollout(GeoTransolver):
         assert D == 2, f"Expected 2D (x, z) coordinates, got D={D}"
 
         freqs = self.fourier_base * (
-            2.0 ** torch.arange(
+            2.0
+            ** torch.arange(
                 self.num_fourier_frequencies,
                 device=coords.device,
                 dtype=coords.dtype,
             )
         )
-        phases = coords.unsqueeze(-1) * (2.0 * torch.pi * freqs)   # [B, N, 2, F]
+        phases = coords.unsqueeze(-1) * (2.0 * torch.pi * freqs)  # [B, N, 2, F]
         sin_enc = torch.sin(phases)
         cos_enc = torch.cos(phases)
-        enc = torch.cat([sin_enc, cos_enc], dim=-1)                # [B, N, 2, 2F]
+        enc = torch.cat([sin_enc, cos_enc], dim=-1)  # [B, N, 2, 2F]
         enc = enc.reshape(B, N, 2 * 2 * self.num_fourier_frequencies)
 
         if squeeze:

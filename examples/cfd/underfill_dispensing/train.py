@@ -108,6 +108,7 @@ class CombinedOptimizer(Optimizer):
 # Per-Timestep Interface Loss
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 class PerTimestepInterfaceLoss(torch.nn.Module):
     """
 
@@ -217,7 +218,7 @@ class PerTimestepInterfaceLoss(torch.nn.Module):
             M = band_mask.sum().item()
             if M == 0:
                 continue
-            
+
             pred_masked = pred[t, band_mask, :]
             target_masked = target[t, band_mask, :]
 
@@ -235,7 +236,6 @@ class PerTimestepInterfaceLoss(torch.nn.Module):
             avg_pct = 100.0
 
         return total_loss, avg_pct
-
 
 
 class Trainer:
@@ -267,12 +267,9 @@ class Trainer:
             absolute_expansion=getattr(iface_cfg, "absolute_expansion", None),
         )
 
-
-
-        
         logger0.info(
             f"Per-timestep interface loss: VOF in ({self.criterion.vof_lo}, "
-            f"{self.criterion.vof_hi}), band={self.criterion.band_fraction*100:.0f}%"
+            f"{self.criterion.vof_hi}), band={self.criterion.band_fraction * 100:.0f}%"
         )
 
         # ====== Dataset Setup ======
@@ -462,7 +459,7 @@ class Trainer:
             )
 
             target = target_flat.transpose(0, 1).unsqueeze(-1)  # [T, N, 1]
-            coords = sample.node_features["coords"]              # [N, 3]
+            coords = sample.node_features["coords"]  # [N, 3]
 
             # Per-timestep interface-only loss
             loss, interface_pct = self.criterion(pred, target, coords)
@@ -512,7 +509,8 @@ class Trainer:
             for t in range(T):
                 gt_t = exact_seq[t, :, 0]
                 band = compute_interface_band(
-                    gt_t, coords,
+                    gt_t,
+                    coords,
                     vof_lo=self.criterion.vof_lo,
                     vof_hi=self.criterion.vof_hi,
                     band_fraction=self.criterion.band_fraction,
@@ -568,9 +566,7 @@ def main(cfg: DictConfig) -> None:
         trainable_params = sum(
             p.numel() for p in model_raw.parameters() if p.requires_grad
         )
-        muon_params = sum(
-            p.numel() for p in model_raw.parameters() if p.ndim == 2
-        )
+        muon_params = sum(p.numel() for p in model_raw.parameters() if p.ndim == 2)
         other_params = trainable_params - muon_params
 
         logger0.info("")
@@ -601,16 +597,21 @@ def main(cfg: DictConfig) -> None:
         if hasattr(model_raw, "rollout_steps"):
             logger0.info(f"  │  Rollout steps:      {model_raw.rollout_steps}")
         if hasattr(model_raw, "num_fourier_frequencies"):
-            logger0.info(f"  │  Fourier freqs:      {model_raw.num_fourier_frequencies}")
+            logger0.info(
+                f"  │  Fourier freqs:      {model_raw.num_fourier_frequencies}"
+            )
         if hasattr(cfg, "model"):
             model_cfg = cfg.model
             for key in [
-                "functional_dim", "out_dim", "geometry_dim",
-                "slice_num", "n_layers",
+                "functional_dim",
+                "out_dim",
+                "geometry_dim",
+                "slice_num",
+                "n_layers",
             ]:
                 val = getattr(model_cfg, key, None)
                 if val is not None:
-                    logger0.info(f"  │  {key + ':' :<20} {val}")
+                    logger0.info(f"  │  {key + ':':<20} {val}")
         logger0.info("  └────────────────────────────────────────────────────────┘")
 
         # ── Optimization ──────────────────────────────────────────────────
@@ -625,7 +626,9 @@ def main(cfg: DictConfig) -> None:
         logger0.info(f"  │  Scheduler:          CosineAnnealingWarmRestarts")
         logger0.info(f"  │    T_0:              {scheduler_T0}")
         logger0.info(f"  │    T_mult:           {scheduler_T_mult}")
-        logger0.info(f"  │  Weight decay:       {getattr(cfg.training, 'weight_decay', 1e-4)}")
+        logger0.info(
+            f"  │  Weight decay:       {getattr(cfg.training, 'weight_decay', 1e-4)}"
+        )
         logger0.info(f"  │  Grad clip max_norm: 25.0")
         logger0.info(f"  │  AMP enabled:        {cfg.training.amp}")
         logger0.info("  └────────────────────────────────────────────────────────┘")
@@ -647,7 +650,9 @@ def main(cfg: DictConfig) -> None:
         logger0.info(f"  │  Device:             {dist.device}")
         logger0.info(f"  │  Checkpoint dir:     {cfg.training.ckpt_path}")
         logger0.info(f"  │  TensorBoard dir:    {cfg.training.tensorboard_log_dir}")
-        logger0.info(f"  │  Save every:         {cfg.training.save_chckpoint_freq} epochs")
+        logger0.info(
+            f"  │  Save every:         {cfg.training.save_chckpoint_freq} epochs"
+        )
         logger0.info(f"  │  Validate every:     {cfg.training.validation_freq} epochs")
         if trainer.epoch_init > 0:
             logger0.info(f"  │  Resumed from epoch: {trainer.epoch_init}")
@@ -660,15 +665,15 @@ def main(cfg: DictConfig) -> None:
         logger0.info(f"  │  {'─' * 40} {'─' * 10}  │")
         for name, param in model_raw.named_parameters():
             if param.requires_grad:
-                logger0.info(
-                    f"  │  {name:<40} {param.numel():>10,}  │"
-                )
+                logger0.info(f"  │  {name:<40} {param.numel():>10,}  │")
         logger0.info("  └────────────────────────────────────────────────────────┘")
 
         logger0.info("")
         logger0.info(f"  Total parameters:     {total_params:>12,}")
         logger0.info(f"  Trainable parameters: {trainable_params:>12,}")
-        logger0.info(f"  Model size:           {total_params * 4 / 1024**2:>11.2f} MB  (fp32)")
+        logger0.info(
+            f"  Model size:           {total_params * 4 / 1024**2:>11.2f} MB  (fp32)"
+        )
 
         logger0.info("")
         logger0.info("=" * 72)
@@ -679,7 +684,6 @@ def main(cfg: DictConfig) -> None:
     # ══════════════════════════════════════════════════════════════════════
     # Training loop
     # ══════════════════════════════════════════════════════════════════════
-    
 
     for epoch in range(trainer.epoch_init, cfg.training.epochs):
         if trainer.sampler is not None:
@@ -756,12 +760,12 @@ def main(cfg: DictConfig) -> None:
 
                 for t in range(len(val_stats["MSE_w_time"])):
                     trainer.writer.add_scalar(
-                        f"val/t{t+1:02d}_MSE",
+                        f"val/t{t + 1:02d}_MSE",
                         val_stats["MSE_w_time"][t].item(),
                         epoch,
                     )
                     trainer.writer.add_scalar(
-                        f"val/t{t+1:02d}_MSE_iface",
+                        f"val/t{t + 1:02d}_MSE_iface",
                         val_stats["MSE_interface_w_time"][t].item(),
                         epoch,
                     )
@@ -776,4 +780,3 @@ def main(cfg: DictConfig) -> None:
 
 if __name__ == "__main__":
     main()
-
