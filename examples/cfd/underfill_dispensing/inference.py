@@ -88,6 +88,7 @@ class TimestepStats:
 
     @classmethod
     def from_array(cls, arr: np.ndarray, threshold: float = 0.5) -> "TimestepStats":
+        """Build statistics from a flattened VOF (or similar) array."""
         arr = arr.flatten()
         return cls(
             mean=float(arr.mean()),
@@ -590,6 +591,7 @@ class InferenceWorker:
 
 @hydra.main(version_base="1.3", config_path="conf", config_name="config")
 def main(cfg: DictConfig):
+    """Hydra entry point: discover test runs, shard across ranks, run inference."""
     DistributedManager.initialize()
     dist = DistributedManager()
 
